@@ -767,7 +767,13 @@
               <div class="font-bold text-gray-800 text-sm truncate">{{ item.name }}</div>
               <div class="flex flex-wrap gap-1.5 mt-1">
                 <!-- 発注ステータスタグ -->
-                <span v-if="item.isOrdered" class="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded-full">
+                <span v-if="item.isOrdered && (item.orderSource === 'OrderEPI' || item.orderSource === 'Collabo Portal' || item.orderSource === 'Pharma Dashboard') && item.deliveryDate" class="inline-flex items-center gap-1 text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 px-1.5 py-0.5 rounded-full">
+                  <i class="fa-solid fa-truck-fast text-[9px]"></i> 納品予定: {{ item.deliveryDate }} <span class="font-normal opacity-70">({{ item.orderSource }})</span>
+                </span>
+                <span v-else-if="item.isOrdered && (item.orderSource === 'OrderEPI' || item.orderSource === 'Collabo Portal' || item.orderSource === 'Pharma Dashboard')" class="inline-flex items-center gap-1 text-[10px] font-bold bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded-full">
+                  <i class="fa-regular fa-clock text-[9px]"></i> 納品予定: 取得前 <span class="font-normal opacity-70">({{ item.orderSource }})</span>
+                </span>
+                <span v-else-if="item.isOrdered" class="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded-full">
                   <i class="fa-solid fa-circle-check text-[9px]"></i> 発注済
                   <span v-if="item.orderSource" class="font-normal opacity-70">({{ item.orderSource }})</span>
                 </span>

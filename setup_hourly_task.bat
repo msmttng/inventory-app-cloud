@@ -23,15 +23,15 @@ echo VBS Path  : %VBS_PATH%
 echo PY Path   : %PY_PATH%
 echo.
 
-echo Registering the background hourly task...
+echo Registering the background task (every 15 minutes)...
 echo.
 
-schtasks /create /tn "%TASK_NAME%" /tr "wscript.exe \"%VBS_PATH%\" \"%PY_PATH%\"" /sc hourly /mo 1 /rl highest /f
+schtasks /create /tn "%TASK_NAME%" /tr "wscript.exe \"%VBS_PATH%\" \"%PY_PATH%\"" /sc minute /mo 15 /rl highest /f
 
 if %ERRORLEVEL% equ 0 (
     echo.
     echo [SUCCESS] Task registered successfully! 
-    echo Extraction will run automatically every hour in the background.
+    echo Extraction will run automatically every 15 minutes in the background.
 ) else (
     echo.
     echo [FAILED] Could not register the task!
