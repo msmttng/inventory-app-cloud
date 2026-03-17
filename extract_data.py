@@ -3,8 +3,16 @@ import os
 import requests  # type: ignore
 import json
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 from playwright.async_api import async_playwright  # type: ignore
+
+# Load .env manually if it exists
+if os.path.exists(".env"):
+    with open(".env", "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip() and not line.startswith("#") and "=" in line:
+                key, value = line.strip().split("=", 1)
+                os.environ[key] = value
 
 # 設定
 GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwDhj91LpWaF6OWhTmr6hbYLgScu0tlBcs2Y4nyXvg2WAwybHYGd5-V579tf0I5_H2dCQ/exec"
@@ -225,17 +233,21 @@ async def extract_orderepi(browser):
     browser_context = None
     try:
         browser_context = await browser.new_context(viewport={'width': 1920, 'height': 1080})
+        repo_page = await browser_context.new_page()
         from bs4 import BeautifulSoup
         
         print(f"[{datetime.now()}] Order EPI (Medipal) 配送予定を取得中...")
         await repo_page.goto("https://www.medipal-app.com/App/servlet/InvokerServlet", wait_until="domcontentloaded")
         
-        # Default Order EPI URL uses a different login page, Medipal app uses another.
-        if await repo_page.locator('input[placeholder="ID"]').count() > 0:
-             await repo_page.fill('input[placeholder="ID"]', email)
-             await repo_page.fill('input[type="password"]', password)
+        try:
+             # Wait for the ID input field to appear, up to 10 seconds.
+             await repo_page.wait_for_selector('input[placeholder="ID"]', timeout=10000)
+             await repo_page.fill('input[placeholder="ID"]', epi_email)
+             await repo_page.fill('input[type="password"]', epi_password)
              await repo_page.click('button:has-text("ログイン")')
              await repo_page.wait_for_timeout(5000)
+        except Exception as e:
+             print(f"[{datetime.now()}] Medipal login input not found or already logged in: {e}")
              
         html = await repo_page.content()
         soup = BeautifulSoup(html, "html.parser")
@@ -273,8 +285,8 @@ async def extract_orderepi(browser):
         if "login" in repo_page.url.lower() or "id" in repo_page.url.lower() or await repo_page.locator("#USER_ID").count() > 0:
             print(f"[{datetime.now()}] Order-EPI 自動ログイン試行...")
             if await repo_page.locator("#USER_ID").count() > 0:
-                 await repo_page.fill("#USER_ID", email)
-                 await repo_page.fill("#ID_PASSWD", password)
+                 await repo_page.fill("#USER_ID", epi_email)
+                 await repo_page.fill("#ID_PASSWD", epi_password)
                  await repo_page.press("#ID_PASSWD", "Enter")
                  await repo_page.wait_for_load_state("domcontentloaded")
                  await asyncio.sleep(2)
