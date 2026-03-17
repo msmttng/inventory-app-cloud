@@ -193,6 +193,7 @@ function doPost(e) {
     else if (dataType === 'dead') targetSheetName = SHEET_POTENTIAL_DEAD;
     else if (dataType === 'history') targetSheetName = SHEET_ORDER_HISTORY;
     else if (dataType === 'receive_history') targetSheetName = SHEET_RECEIVE_HISTORY;
+    else if (dataType === 'collabo_history') targetSheetName = 'CollaboHistory';
 
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
     let sheet = spreadsheet.getSheetByName(targetSheetName);
@@ -504,6 +505,8 @@ function getPotentialDeadStock() {
 function normalizeText(text) {
   if (!text) return '';
   let normalized = String(text).normalize('NFKC').toLowerCase();
+  // ハイフンなどをすべて長音（ー）に統一
+  normalized = normalized.replace(/[-－‑—–ｰ]/g, 'ー');
   return normalized.replace(/[\u30a1-\u30f6]/g, function(match) {
     return String.fromCharCode(match.charCodeAt(0) - 0x60);
   });
@@ -609,12 +612,13 @@ function getRecentEpiOrderedNames_(days) {
     if (data.length < 2) return names;
 
     const headers = data[0];
-    let dateCol = -1, nameCol = -1, statusCol = -1;
+    let dateCol = -1, nameCol = -1, statusCol = -1, deliveryCol = -1;
     for (let i = 0; i < headers.length; i++) {
       const h = String(headers[i]).replace(/[\s　]/g, '');
       if (h.includes('発注日') || h.includes('日付')) dateCol = i;
       if (h.includes('品名') || h.includes('商品') || h.includes('薬品')) nameCol = i;
       if (h.includes('状態') || h.includes('ステータス') || h.includes('状況')) statusCol = i;
+      if (h.includes('納品予定') || h.includes('配送日')) deliveryCol = i;
     }
     if (dateCol === -1 || nameCol === -1) return names;
 
@@ -633,13 +637,64 @@ function getRecentEpiOrderedNames_(days) {
         orderDate = new Date(String(dateVal).replace(/^'/, ''));
       }
       if (!isNaN(orderDate.getTime()) && orderDate >= cutoff) {
-        names.push(String(row[nameCol]).trim());
+        names.push({
+          name: String(row[nameCol]).trim(),
+          deliveryDate: deliveryCol !== -1 ? String(row[deliveryCol]).trim() : ''
+        });
       }
     }
   } catch(e) {
     console.error('getRecentEpiOrderedNames_ error:', e);
   }
   return names;
+}
+
+function getCollaboHistoryDates_(days=7) {
+  const dates = [];
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('CollaboHistory');
+    if (!sheet) return dates;
+    
+    // Header includes: 発注日, 状態, メーカー, 品名, 規格, 単位, 数量, 発注先, 納品予定
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) return dates;
+    
+    const headers = data[0];
+    const dateCol = headers.indexOf('発注日');
+    const nameCol = headers.indexOf('品名');
+    const deliveryCol = headers.indexOf('納品予定');
+    const statusCol = headers.indexOf('状態');
+    
+    if (dateCol === -1 || nameCol === -1) return dates;
+    
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - (days * 24 * 60 * 60 * 1000));
+    
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const status = String(row[statusCol] || '');
+      if (status.includes('キャンセル')) continue;
+      
+      let dateVal = row[dateCol];
+      let orderDate;
+      if (dateVal instanceof Date) {
+        orderDate = dateVal;
+      } else {
+        orderDate = new Date(String(dateVal).replace(/^'/, ''));
+      }
+      
+      if (!isNaN(orderDate.getTime()) && orderDate >= cutoff) {
+        dates.push({
+          name: String(row[nameCol]).trim(),
+          deliveryDate: deliveryCol !== -1 ? String(row[deliveryCol]).trim() : '',
+          source: 'collabo'
+        });
+      }
+    }
+  } catch(e) {
+    console.error('getCollaboHistoryDates_ error:', e);
+  }
+  return dates;
 }
 
 function getMinusStocks() {
@@ -680,7 +735,8 @@ function getMinusStocks() {
 
     // ── 発注済みチェック：直近7日間の注文を取得 ──
     const recentOrderedIds = getRecentOrderedItemIds_(token, 7);
-    const recentEpiNames = getRecentEpiOrderedNames_(7);
+    const recentEpiOrders = getRecentEpiOrderedNames_(7);
+    const collaboHistoryDates = getCollaboHistoryDates_(7);
 
     const minusItems = allData
       .filter(stock => (stock.quantity || 0) < 0)
@@ -690,20 +746,61 @@ function getMinusStocks() {
         // MedOrder 発注チェック (stockable_item_id で完全一致)
         const orderedViaMedOrder = recentOrderedIds.has(item.stockable_item_id);
 
-        // OrderEPI 発注チェック (名前の先頭8文字で部分一致)
+        // OrderEPI と Collabo の納品予定を統合チェック
         const normalizedItemName = normalizeText(item.name);
-        const orderedViaEpi = recentEpiNames.some(epiName => {
-          const normalizedEpiName = normalizeText(epiName);
+        const shortItem = normalizedItemName.substring(0, 8);
+        
+        let deliveryDate = '';
+        let matchedSource = ''; // 'OrderEPI' or 'Collabo' etc.
+
+        // 1. OrderEPI をチェック
+        const orderedViaEpi = recentEpiOrders.some(epiOrder => {
+          const normalizedEpiName = normalizeText(epiOrder.name);
           if (!normalizedItemName || !normalizedEpiName) return false;
-          const shortItem = normalizedItemName.substring(0, 8);
           const shortEpi  = normalizedEpiName.substring(0, 8);
-          return shortItem === shortEpi
+          const isMatch = shortItem === shortEpi
               || normalizedItemName.includes(normalizedEpiName)
               || normalizedEpiName.includes(normalizedItemName);
+          
+          if (isMatch) {
+            deliveryDate = epiOrder.deliveryDate || '';
+          }
+          return isMatch;
         });
+        
+        // 2. Collabo をチェック (OrderEPIで日付が取れなかった場合などを補完)
+        let orderedViaCollabo = false;
+        if (!deliveryDate || deliveryDate === '取得前') {
+          orderedViaCollabo = collaboHistoryDates.some(pdItem => {
+            const normalizedPdName = normalizeText(pdItem.name);
+            if (!normalizedItemName || !normalizedPdName) return false;
+            const shortPd = normalizedPdName.substring(0, 8);
+            const isMatch = shortItem === shortPd
+                || normalizedItemName.includes(normalizedPdName)
+                || normalizedPdName.includes(normalizedItemName);
+            
+            if (isMatch) {
+              deliveryDate = pdItem.deliveryDate || '';
+              matchedSource = pdItem.source; // e.g. 'collabo'
+            }
+            return isMatch;
+          });
+        }
 
-        item.isOrdered = orderedViaMedOrder || orderedViaEpi;
-        item.orderSource = orderedViaMedOrder ? 'MedOrder' : (orderedViaEpi ? 'OrderEPI' : '');
+        item.isOrdered = orderedViaMedOrder || orderedViaEpi || orderedViaCollabo;
+        
+        // 優先度表示: OrderEPI > Collabo > MedOrder
+        if (orderedViaEpi) {
+          item.orderSource = 'OrderEPI';
+        } else if (orderedViaCollabo) {
+          item.orderSource = 'Collabo Portal';
+        } else if (orderedViaMedOrder) {
+          item.orderSource = 'MedOrder';
+        } else {
+          item.orderSource = '';
+        }
+
+        item.deliveryDate = deliveryDate;
         return item;
       })
       .sort((a, b) => {
@@ -844,7 +941,7 @@ function getOrderHistory() {
       const data = sheet.getDataRange().getValues();
       if (data.length > 1) {
         const headers = data[0];
-        let dateCol = -1, nameCol = -1, qtyCol = -1, statusCol = -1, makerCol = -1, supplierCol = -1;
+        let dateCol = -1, nameCol = -1, qtyCol = -1, statusCol = -1, makerCol = -1, supplierCol = -1, deliveryCol = -1;
         for (let i = 0; i < headers.length; i++) {
           const h = String(headers[i]).replace(/[\s　]/g, '');
           if (h.includes('発注日') || h.includes('日付')) dateCol = i;
@@ -853,6 +950,7 @@ function getOrderHistory() {
           if (h.includes('状態') || h.includes('ステータス') || h.includes('状況')) statusCol = i;
           if (h.includes('メーカー') || h.includes('製造')) makerCol = i;
           if (h.includes('発注先') || h.includes('卸')) supplierCol = i;
+          if (h.includes('納品予定') || h.includes('配送日')) deliveryCol = i;
         }
         if (dateCol !== -1 && nameCol !== -1) {
           for (let i = 1; i < data.length; i++) {
@@ -872,7 +970,8 @@ function getOrderHistory() {
               quantity: qtyCol !== -1 ? row[qtyCol] : '',
               status: statusCol !== -1 ? String(row[statusCol]) : '',
               maker: makerCol !== -1 ? String(row[makerCol]) : '',
-              supplier: supplierCol !== -1 ? String(row[supplierCol]) : ''
+              supplier: supplierCol !== -1 ? String(row[supplierCol]) : '',
+              deliveryDate: deliveryCol !== -1 ? String(row[deliveryCol]) : ''
             });
           }
         }

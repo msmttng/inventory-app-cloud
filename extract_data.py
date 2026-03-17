@@ -225,17 +225,60 @@ async def extract_orderepi(browser):
     browser_context = None
     try:
         browser_context = await browser.new_context(viewport={'width': 1920, 'height': 1080})
-        repo_page = await browser_context.new_page()
+        from bs4 import BeautifulSoup
+        
+        print(f"[{datetime.now()}] Order EPI (Medipal) 配送予定を取得中...")
+        await repo_page.goto("https://www.medipal-app.com/App/servlet/InvokerServlet", wait_until="domcontentloaded")
+        
+        # Default Order EPI URL uses a different login page, Medipal app uses another.
+        if await repo_page.locator('input[placeholder="ID"]').count() > 0:
+             await repo_page.fill('input[placeholder="ID"]', email)
+             await repo_page.fill('input[type="password"]', password)
+             await repo_page.click('button:has-text("ログイン")')
+             await repo_page.wait_for_timeout(5000)
+             
+        html = await repo_page.content()
+        soup = BeautifulSoup(html, "html.parser")
+        rows = soup.select("tr")
+        delivery_status_map = {}
+        
+        today_str = datetime.now().strftime("%m/%d")
+        tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%m/%d")
+        
+        for row in rows:
+            name_a = row.select_one("a[id^='hnmy']")
+            if not name_a: continue
+            
+            name = name_a.text.strip().replace('\n', ' ')
+            row_text = row.text.replace('\n', '')
+            status = ""
+            
+            if "本日" in row_text: status = today_str
+            elif "明日" in row_text: status = tomorrow_str
+            elif row.select_one("span") and '入荷未定' in row.select_one("span").text:
+                status = "入荷未定"
+            elif "入荷未定" in row_text or "出荷調整" in row_text:
+                status = "入荷未定"
+            else:
+                tds = row.select("td")
+                if len(tds) > 5: status = tds[5].text.strip()
+                
+            if status:
+                delivery_status_map[name] = status
+                
+        print(f"[{datetime.now()}] Order EPI 配送予定を {len(delivery_status_map)} 件取得しました。")
+        
         await repo_page.goto("https://www.order-epi.com/order/", wait_until="domcontentloaded")
         
         if "login" in repo_page.url.lower() or "id" in repo_page.url.lower() or await repo_page.locator("#USER_ID").count() > 0:
             print(f"[{datetime.now()}] Order-EPI 自動ログイン試行...")
             if await repo_page.locator("#USER_ID").count() > 0:
-                 await repo_page.fill("#USER_ID", epi_email)
-                 await repo_page.fill("#ID_PASSWD", epi_password)
+                 await repo_page.fill("#USER_ID", email)
+                 await repo_page.fill("#ID_PASSWD", password)
                  await repo_page.press("#ID_PASSWD", "Enter")
                  await repo_page.wait_for_load_state("domcontentloaded")
                  await asyncio.sleep(2)
+        
         
         print(f"[{datetime.now()}] 発注履歴ボタンをクリックします...")
         try:
@@ -244,7 +287,7 @@ async def extract_orderepi(browser):
             await asyncio.sleep(5)
         except Exception as click_err:
             print(f"[{datetime.now()}] ⚠️ 画面上の発注履歴ボタンが見つからないかクリックに失敗しました。: {click_err}")
-            await repo_page.goto("https://www.order-epi.com/order/servlet/InvokerServlet?s2=OrderHistoryList", wait_until="domcontentloaded")
+            await repo_page.goto("https://www.medipal-app.com/App/servlet/InvokerServlet?s2=OrderHistoryList", wait_until="domcontentloaded")
             await asyncio.sleep(3)
         
         table_found = False
@@ -270,7 +313,15 @@ async def extract_orderepi(browser):
                             unit_str = ""
                             qty_str = texts[4].replace('\n', ' ').replace(',', '').strip()
                             supplier_str = texts[5].replace('\n', ' ').replace(',', '').strip()
-                            csv_data_body += f"{date_str},{status_str},{maker_str},{name_str},,{unit_str},{qty_str},{supplier_str}\n"
+                            
+                            # Delivery status matching
+                            delivery_status = ""
+                            for d_name, d_status in delivery_status_map.items():
+                                if d_name in name_str or name_str in d_name:
+                                    delivery_status = d_status
+                                    break
+                                    
+                            csv_data_body += f"{date_str},{status_str},{maker_str},{name_str},,{unit_str},{qty_str},{supplier_str},{delivery_status}\n"
                             added_rows += 1
                     
                     if added_rows > 0:
@@ -281,7 +332,7 @@ async def extract_orderepi(browser):
                 pass
         
         if table_found and added_rows > 0:
-            csv_data = "発注日,状態,メーカー,品名,規格,単位,数量,発注先\n" + csv_data_body
+            csv_data = "発注日,状態,メーカー,品名,規格,単位,数量,発注先,納品予定\n" + csv_data_body
             requests.post(GAS_WEB_APP_URL, params={'type': 'history'}, data=csv_data.encode('utf-8'))
             print(f"[{datetime.now()}] Order-EPI History: Success ({added_rows} rows)")
             await repo_page.close()
@@ -297,6 +348,95 @@ async def extract_orderepi(browser):
         if browser_context:
             await browser_context.close()
 
+async def extract_collabo(browser):
+    print(f"\n[{datetime.now()}] --- PHASE 4: Collabo Portal からの発注履歴抽出 ---")
+    collabo_id = os.environ.get("COLLABO_ID")
+    collabo_password = os.environ.get("COLLABO_PASSWORD")
+    
+    if not collabo_id or not collabo_password:
+        print(f"[{datetime.now()}] ⚠️ COLLABO_ID または COLLABO_PASSWORD が設定されていないため、Phase 4はスキップします。")
+        return "Collabo Skipped"
+
+    browser_context = None
+    try:
+        browser_context = await browser.new_context(viewport={'width': 1920, 'height': 1080})
+        page = await browser_context.new_page()
+        
+        print(f"[{datetime.now()}] Collabo Portal ログインページへアクセス中...")
+        await page.goto("https://szgp-app1.collaboportal.com/frontend#/", wait_until="domcontentloaded")
+        await asyncio.sleep(2)
+        
+        # ログインフォームの処理
+        if await page.locator("input[placeholder='ログインID']").count() > 0 or await page.locator("input[type='password']").count() > 0:
+            print(f"[{datetime.now()}] Collabo Portal ログインシーケンス開始...")
+            
+            # fill ID (assuming input with type text or similar, check placeholder)
+            await page.fill("input[placeholder='ログインID'], input[type='text'], input[name='loginId']", collabo_id)
+            await page.fill("input[type='password']", collabo_password)
+            await page.click("button:has-text('ログイン'), button[type='submit']")
+            await page.wait_for_load_state("domcontentloaded")
+            await asyncio.sleep(5)
+            
+        print(f"[{datetime.now()}] Collabo Portal NoukiSearchへアクセス中...")
+        await page.goto("https://szgp-app1.collaboportal.com/frontend#/NoukiSearch", wait_until="networkidle")
+        await asyncio.sleep(5) # wait for data to fetch
+        
+        from bs4 import BeautifulSoup
+        html = await page.content()
+        soup = BeautifulSoup(html, "html.parser")
+        
+        # Extract items from the table using playwright locators
+        table_rows = page.locator("table tr")
+        count = await table_rows.count()
+        
+        csv_data_body = ""
+        added_rows = 0
+        
+        if count > 0:
+            for i in range(count):
+                texts = await table_rows.nth(i).locator("td").all_inner_texts()
+                # Indexes: 0:No 1:受付日時 2:'' 3:商品コード 4:メーカー 5:品名・規格・容量 6:発注数 7:納品予定数 8:納品予定日 9:状況
+                if len(texts) >= 9:
+                     # Skip header
+                     if '品名' in texts[5] or '受付' in texts[1]:
+                         continue
+                         
+                     name_col = texts[5]
+                     qty_col = texts[6]
+                     date_col = texts[8]
+                     maker_col = texts[4]
+                     status_col = texts[9]
+                     
+                     # Extract MM/DD from date_col
+                     import re
+                     date_match = re.search(r'(\d{1,2}/\d{1,2})', date_col)
+                     delivery_date = date_match.group(1) if date_match else "取得前"
+                     
+                     if "出荷調整" in status_col or "未定" in status_col:
+                         delivery_date = "入荷未定"
+                     
+                     # Clean name
+                     name_clean = name_col.replace('\n', ' ').strip()
+                     if name_clean:
+                         csv_data_body += f"'{datetime.now().strftime('%Y/%m/%d')},完了,{maker_col},{name_clean},,箱,{qty_col},Collabo,{delivery_date}\n"
+                         added_rows += 1
+                         
+        if added_rows > 0:
+            csv_data = "発注日,状態,メーカー,品名,規格,単位,数量,発注先,納品予定\n" + csv_data_body
+            requests.post(GAS_WEB_APP_URL, params={'type': 'collabo_history'}, data=csv_data.encode('utf-8'))
+            print(f"[{datetime.now()}] Collabo Portal History: Success ({added_rows} rows)")
+            return f"Collabo Success ({added_rows} rows)"
+        else:
+            print(f"[{datetime.now()}] ⚠️ Collabo Portal 履歴テーブルデータが空か見つかりませんでした。")
+            return "Collabo Success (0 rows)"
+            
+    except Exception as e:
+        err_msg = f"Collabo Portal Error: {e}"
+        print(f"[{datetime.now()}] ⚠️ {err_msg}")
+        raise RuntimeError(err_msg)
+    finally:
+        if browser_context:
+            await browser_context.close()
 
 async def run_extraction():
     print(f"[{datetime.now()}] Looker Studio & MedOrder データ抽出を開始します... (GitHub Actions Cloud Mode)")
@@ -321,11 +461,12 @@ async def run_extraction():
             args=['--start-maximized', '--disable-blink-features=AutomationControlled']
         )
 
-        # 3つのPhaseを非同期で同時に走らせる
+        # 4つのPhaseを非同期で同時に走らせる
         results = await asyncio.gather(
             extract_looker_studio(browser, state_path),
             extract_medorder(browser),
             extract_orderepi(browser),
+            extract_collabo(browser),
             return_exceptions=True
         )
 
