@@ -1,0 +1,42 @@
+
+
+
+
+
+
+
+<script src="/order/js2nd/CheckFunctions2nd.js?ver26"></script>
+<link href="/order/css2nd/common-style2nd.css?ver19" rel="stylesheet" />
+<HTML>
+<HEAD>
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html;charset=UTF-8">
+<TITLE>エラーページ</TITLE>
+<SCRIPT LANGUAGE="JavaScript">
+<!--
+
+
+
+
+
+
+
+
+  function errorMsg(){
+   
+
+        alert("セッションが切れました。\n最初からやり直してください。");
+        
+            location.href = "/order/Logout.jsp";
+      
+  
+  }
+//-->
+</SCRIPT>
+</HEAD>
+<BODY onLoad="errorMsg()">
+<form name="formR" method="POST" onsubmit="return false;">
+<input type="hidden" name="ACTION">
+<input type="hidden" name="ERRMSG_DISP_FLG">
+</form>
+</BODY>
+</HTML>

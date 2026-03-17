@@ -1,0 +1,54 @@
+(node:11944) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Traceback (most recent call last):
+  File "C:\Users\masam\.gemini\antigravity\scratch\inventory_app\extract_data.py", line 53, in main
+    browser = await p.chromium.connect_over_cdp("http://localhost:9222")
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\masam\.gemini\antigravity\scratch\inventory_app\venv\Lib\site-packages\playwright\async_api\_generated.py", line 14946, in connect_over_cdp
+    await self._impl_obj.connect_over_cdp(
+    ...<5 lines>...
+    )
+  File "C:\Users\masam\.gemini\antigravity\scratch\inventory_app\venv\Lib\site-packages\playwright\_impl\_browser_type.py", line 206, in connect_over_cdp
+    response = await self._channel.send_return_as_dict(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        "connectOverCDP", TimeoutSettings.launch_timeout, params
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\masam\.gemini\antigravity\scratch\inventory_app\venv\Lib\site-packages\playwright\_impl\_connection.py", line 83, in send_return_as_dict
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "C:\Users\masam\.gemini\antigravity\scratch\inventory_app\venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.Error: BrowserType.connect_over_cdp: connect ECONNREFUSED ::1:9222
+Call log:
+  - <ws preparing> retrieving websocket url from http://localhost:9222
+
+[2026-03-09 16:30:04.134781] Looker Studioデータ抽出バッチを開始します...
+[2026-03-09 16:30:04.135092] バックグラウンドでChromeをデバッグモードで起動します...
+[2026-03-09 16:30:09.742681] ブラウザに接続しています...
+[2026-03-09 16:30:10.065683] パイプライン実行中にエラーが発生しました: BrowserType.connect_over_cdp: connect ECONNREFUSED ::1:9222
+Call log:
+  - <ws preparing> retrieving websocket url from http://localhost:9222
+
+[2026-03-09 16:30:10.076427] ブラウザを終了します。
+Traceback (most recent call last):
+  File "C:\Users\masam\.gemini\antigravity\scratch\inventory_app\extract_data.py", line 111, in <module>
+    asyncio.run(main())
+    ~~~~~~~~~~~^^^^^^^^
+  File "C:\Users\masam\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Users\masam\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\masam\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "C:\Users\masam\.gemini\antigravity\scratch\inventory_app\extract_data.py", line 106, in main
+    await browser.close()
+          ^^^^^^^
+UnboundLocalError: cannot access local variable 'browser' where it is not associated with a value

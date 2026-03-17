@@ -1,0 +1,1269 @@
+﻿<!DOCTYPE html>
+<html lang=\\"ja\\">
+
+<head>
+  <base target=\\"_top\\">
+  <meta charset=\\"UTF-8\\">
+  <meta name=\\"viewport\\" content=\\"width=device-width, initial-scale=1.0\\">
+  <title>薬の在庫・棚番検索アプリ<\\/title>
+
+  <script src=\\"https://cdn.tailwindcss.com\\"><\\/script>
+  <script src=\\"https://unpkg.com/vue@3/dist/vue.global.js\\"><\\/script>
+  <link rel=\\"stylesheet\\" href=\\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css\\">
+  <link href=\\"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap\\" rel=\\"stylesheet\\">
+
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+    .glass-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { animation: spin 1s linear infinite; }
+    .fade-in { animation: fadeIn 0.4s ease-in-out; }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    .low-stock-border { border-left-color: #f59e0b !important; }
+    .low-stock-pulse { animation: pulse 2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.65; } }
+    input[type=range] { -webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:4px; background:#e0e7ff; outline:none; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:18px; height:18px; border-radius:50%; background:#6366f1; cursor:pointer; }
+    .shelf-card { transition: box-shadow 0.2s; }
+    .shelf-card:hover { box-shadow: 0 8px 20px -4px rgba(0,0,0,0.12); }
+  <\\/style>
+<\\/head>
+
+<body class=\\"antialiased text-gray-800\\">
+<div id=\\"app\\" class=\\"min-h-screen flex flex-col items-center p-4 sm:p-6 md:p-8\\">
+
+  
+  <header class=\\"w-full max-w-3xl mb-4 mt-4 text-center\\">
+    <h1 class=\\"text-3xl sm:text-4xl font-bold text-indigo-700 tracking-tight flex items-center justify-center gap-3\\">
+      <i class=\\"fa-solid fa-pills mb-1\\"><\\/i> 在庫・棚番 検索
+    <\\/h1>
+    <div class=\\"flex items-center justify-center gap-3 mt-2\\">
+      <p class=\\"text-gray-400 text-xs flex items-center gap-1\\">
+        <i class=\\"fa-regular fa-clock\\"><\\/i>
+        <span v-if=\\"lastUpdated\\">最終更新: {{ lastUpdated }}<\\/span>
+        <span v-else>更新日時を読み込み中...<\\/span>
+      <\\/p>
+      <a href=\\"https://app.medorder.jp/pharmacies/20/stocks\\" target=\\"_blank\\" rel=\\"noopener\\"
+        class=\\"inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 hover:shadow transition-all duration-200\\">
+        <i class=\\"fa-solid fa-arrow-up-right-from-square text-[10px]\\"><\\/i>MedOrderで在庫確認
+      <\\/a>
+    <\\/div>
+  <\\/header>
+
+  
+  <nav class=\\"w-full max-w-3xl mb-4\\">
+    <div class=\\"glass-card rounded-xl p-1 flex gap-1 flex-wrap\\">
+      <button @click=\\"activeTab = 'search'\\"
+        class=\\"flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1\\"
+        :class=\\"activeTab === 'search' ? 'bg-indigo-600 text-white shadow' : 'text-gray-500 hover:bg-gray-100'\\">
+        <i class=\\"fa-solid fa-magnifying-glass text-sm\\"><\\/i>検索
+      <\\/button>
+      <button @click=\\"switchToShelfTab\\"
+        class=\\"flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1\\"
+        :class=\\"activeTab === 'shelf' ? 'bg-indigo-600 text-white shadow' : 'text-gray-500 hover:bg-gray-100'\\">
+        <i class=\\"fa-solid fa-layer-group text-sm\\"><\\/i>棚番
+      <\\/button>
+      <button @click=\\"switchToAlertTab\\"
+        class=\\"flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1 relative\\"
+        :class=\\"activeTab === 'alert' ? 'bg-red-500 text-white shadow' : 'text-gray-500 hover:bg-gray-100'\\">
+        <i class=\\"fa-solid fa-triangle-exclamation text-sm\\"><\\/i>発注
+        <span v-if=\\"alertData.total &gt; 0 &amp;&amp; activeTab !== 'alert'\\"
+          class=\\"absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center px-1\\">
+          {{ alertData.total > 99 ? '99+' : alertData.total }}
+        <\\/span>
+      <\\/button>
+      <button @click=\\"switchToReturnTab\\"
+        class=\\"flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1\\"
+        :class=\\"activeTab === 'return' ? 'bg-blue-600 text-white shadow' : 'text-gray-500 hover:bg-gray-100'\\">
+        <i class=\\"fa-solid fa-rotate-left text-sm\\"><\\/i>返品
+      <\\/button>
+      <button @click=\\"switchToDeadTab\\"
+        class=\\"flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1\\"
+        :class=\\"activeTab === 'dead' ? 'bg-purple-600 text-white shadow' : 'text-gray-500 hover:bg-gray-100'\\">
+        <i class=\\"fa-solid fa-ghost text-sm\\"><\\/i>不動
+      <\\/button>
+      <button @click=\\"switchToLiveTab\\"
+        class=\\"flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1\\"
+        :class=\\"activeTab === 'live' ? 'bg-green-600 text-white shadow' : 'text-gray-500 hover:bg-gray-100'\\">
+        <i class=\\"fa-solid fa-satellite-dish text-sm\\"><\\/i>RT
+      <\\/button>
+      
+      <button @click=\\"switchToMinusTab\\"
+        class=\\"flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1 relative\\"
+        :class=\\"activeTab === 'minus' ? 'bg-rose-700 text-white shadow' : 'text-gray-500 hover:bg-gray-100'\\">
+        <i class=\\"fa-solid fa-circle-minus text-sm\\"><\\/i>マイナス
+        <span v-if=\\"minusStockItems.length &gt; 0 &amp;&amp; activeTab !== 'minus'\\"
+          class=\\"absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-rose-700 text-white text-xs font-bold rounded-full flex items-center justify-center px-1\\">
+          {{ minusStockItems.length > 99 ? '99+' : minusStockItems.length }}
+        <\\/span>
+      <\\/button>
+    <\\/div>
+  <\\/nav>
+
+  <main class=\\"w-full max-w-3xl\\">
+
+    
+    <div v-if=\\"activeTab === 'search'\\">
+      <div class=\\"glass-card rounded-2xl p-4 sm:p-6 mb-4\\">
+        <form @submit.prevent=\\"performSearch\\" class=\\"mb-4\\">
+          <div class=\\"relative flex items-center w-full h-14 rounded-xl bg-white overflow-hidden border-2 border-indigo-100 focus-within:border-indigo-500 focus-within:shadow-lg transition-all duration-300\\">
+            <div class=\\"grid place-items-center h-full w-12\\">
+              <i class=\\"fa-solid fa-magnifying-glass text-indigo-400\\"><\\/i>
+            <\\/div>
+            <input v-model=\\"searchQuery\\"
+              class=\\"h-full w-full outline-none text-gray-700 pr-2 placeholder-gray-400 bg-transparent text-lg font-medium\\"
+              type=\\"text\\" id=\\"search\\" placeholder=\\"薬の名前を入力してください...\\" autocomplete=\\"off\\" :disabled=\\"isLoading\\" autofocus />
+            <button type=\\"button\\" v-if=\\"searchQuery.length &gt; 0 &amp;&amp; !isLoading\\" @click=\\"clearSearch\\"
+              class=\\"h-full px-4 text-gray-400 hover:text-red-500 transition-colors\\">
+              <i class=\\"fa-solid fa-xmark\\"><\\/i>
+            <\\/button>
+            <button type=\\"submit\\"
+              class=\\"bg-indigo-600 hover:bg-indigo-700 text-white h-full px-6 font-semibold text-sm sm:text-base min-w-[90px] flex items-center justify-center transition-colors\\"
+              :disabled=\\"isLoading || searchQuery.trim() === ''\\"
+              :class=\\"{ 'opacity-50 cursor-not-allowed': isLoading || searchQuery.trim() === '' }\\">
+              <span v-if=\\"!isLoading\\">検索<\\/span>
+              <i v-else class=\\"fa-solid fa-circle-notch spinner text-lg\\"><\\/i>
+            <\\/button>
+          <\\/div>
+        <\\/form>
+        
+        <div v-if=\\"recentSearches.length &gt; 0 || topSearches.length &gt; 0\\" class=\\"border-t border-gray-100 pt-3 mb-3\\">
+
+          
+          <div v-if=\\"topSearches.length &gt; 0\\" class=\\"mb-3\\">
+            <div class=\\"flex items-center justify-between mb-1.5\\">
+              <span class=\\"text-[11px] font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-1\\">
+                <i class=\\"fa-solid fa-fire\\"><\\/i> よく検索される薬
+              <\\/span>
+            <\\/div>
+            <div class=\\"flex flex-wrap gap-1.5\\">
+              <button v-for=\\"item in topSearches\\" :key=\\"item.query\\"
+                @click=\\"applyHistoryQuery(item.query)\\"
+                class=\\"inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition-all shadow-sm\\">
+                <i class=\\"fa-solid fa-fire text-yellow-300 text-[10px]\\"><\\/i>
+                {{ item.query }}
+                <span class=\\"bg-indigo-500 rounded-full px-1.5 py-0.5 text-[10px] font-black ml-0.5\\">{{ item.count }}<\\/span>
+              <\\/button>
+            <\\/div>
+          <\\/div>
+
+          
+          <div v-if=\\"recentSearches.length &gt; 0\\">
+            <div class=\\"flex items-center justify-between mb-1.5\\">
+              <span class=\\"text-[11px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1\\">
+                <i class=\\"fa-solid fa-clock-rotate-left\\"><\\/i> 最近の検索
+              <\\/span>
+              <button @click=\\"clearHistory\\"
+                class=\\"text-[11px] text-gray-300 hover:text-red-400 transition-colors flex items-center gap-1\\">
+                <i class=\\"fa-solid fa-trash-can text-[10px]\\"><\\/i> 履歴を削除
+              <\\/button>
+            <\\/div>
+            <div class=\\"flex flex-wrap gap-1.5\\">
+              <button v-for=\\"item in recentSearches\\" :key=\\"item.query\\"
+                @click=\\"applyHistoryQuery(item.query)\\"
+                class=\\"inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 border border-transparent transition-all\\">
+                <i class=\\"fa-solid fa-clock-rotate-left text-[10px] text-gray-400\\"><\\/i>
+                {{ item.query }}
+              <\\/button>
+            <\\/div>
+          <\\/div>
+        <\\/div>
+
+        <div class=\\"border-t border-gray-100 pt-4\\">
+          <div class=\\"flex items-center justify-between mb-2\\">
+            <label class=\\"text-xs font-semibold text-gray-500 flex items-center gap-2\\">
+              <i class=\\"fa-solid fa-triangle-exclamation text-amber-400\\"><\\/i>在庫わずか警告ライン
+            <\\/label>
+            <span class=\\"text-sm font-bold text-amber-500 bg-amber-50 border border-amber-200 rounded-full px-3 py-0.5\\">{{ lowStockThreshold }} 個以下<\\/span>
+          <\\/div>
+          <input type=\\"range\\" v-model.number=\\"lowStockThreshold\\" min=\\"0\\" max=\\"100\\" step=\\"1\\" />
+          <div class=\\"flex justify-between text-xs text-gray-300 mt-1\\"><span>0<\\/span><span>50<\\/span><span>100<\\/span><\\/div>
+        <\\/div>
+      <\\/div>
+      <div v-if=\\"errorMsg\\" class=\\"bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg flex items-start fade-in\\">
+        <i class=\\"fa-solid fa-triangle-exclamation text-red-500 mt-1 mr-3\\"><\\/i>
+        <p class=\\"text-red-700\\">{{ errorMsg }}<\\/p>
+      <\\/div>
+      <div v-if=\\"hasSearched &amp;&amp; !isLoading\\">
+        <div v-if=\\"results.length === 0\\" class=\\"glass-card rounded-2xl p-10 text-center fade-in flex flex-col items-center\\">
+          <div class=\\"w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-4\\">
+            <i class=\\"fa-solid fa-box-open text-3xl text-gray-300\\"><\\/i>
+          <\\/div>
+          <h3 class=\\"text-lg font-medium text-gray-900 mb-1\\">見つかりませんでした<\\/h3>
+          <p class=\\"text-gray-500 text-sm\\">「{{ lastSearchedQuery }}」に一致する薬は登録されていません。<\\/p>
+        <\\/div>
+        <div v-else>
+          <div class=\\"flex justify-between items-center mb-3 px-2\\">
+            <h2 class=\\"text-lg font-semibold text-gray-700\\">検索結果<\\/h2>
+            <div class=\\"flex items-center gap-2\\">
+              <span v-if=\\"lowStockCount &gt; 0\\" class=\\"text-xs font-medium bg-amber-100 text-amber-700 py-1 px-3 rounded-full flex items-center gap-1 low-stock-pulse\\">
+                <i class=\\"fa-solid fa-triangle-exclamation text-xs\\"><\\/i> 在庫わずか {{ lowStockCount }}件
+              <\\/span>
+              <span class=\\"text-xs font-medium bg-indigo-100 text-indigo-800 py-1 px-3 rounded-full\\">合致 {{ primaryResults.length }}件 <span v-if=\\"alternativeResults.length &gt; 0\\">/ 代替 {{ alternativeResults.length }}件<\\/span><\\/span>
+            <\\/div>
+          <\\/div>
+          <div class=\\"space-y-3 mb-6\\">
+            <div v-for=\\"(item, index) in primaryResults\\" :key=\\"'p'&#43;index\\"
+              class=\\"glass-card rounded-xl p-5 border-l-4 border-indigo-500 hover:shadow-md transition-shadow fade-in\\"
+              :class=\\"{ 'low-stock-border': isLowStock(item.stock) }\\"
+              :style=\\"'animation-delay:' &#43; (index * 0.04) &#43; 's'\\">
+              <div class=\\"flex justify-between items-start gap-4 mb-3\\">
+                <div class=\\"flex-1 min-w-0 pr-2 pb-1 sm:pb-0\\">
+                  <div class=\\"flex items-center gap-2 mb-1 flex-wrap\\">
+                    <span class=\\"text-xs text-indigo-500 font-bold tracking-wider uppercase\\">薬品名<\\/span>
+                    <span v-if=\\"item.type &amp;&amp; item.type.includes('後発')\\" class=\\"text-[10px] font-bold text-teal-700 bg-teal-100 border border-teal-200 rounded px-1.5 py-0.5\\">後発品<\\/span>
+                    <span v-if=\\"item.type &amp;&amp; item.type.includes('先発')\\" class=\\"text-[10px] font-bold text-blue-700 bg-blue-100 border border-blue-200 rounded px-1.5 py-0.5\\">先発品<\\/span>
+                    <span v-if=\\"isLowStock(item.stock)\\" class=\\"text-xs font-bold text-amber-600 bg-amber-100 border border-amber-200 rounded-full px-2 py-0.5 flex items-center gap-1 low-stock-pulse\\">
+                      <i class=\\"fa-solid fa-triangle-exclamation text-xs\\"><\\/i> 在庫わずか
+                    <\\/span>
+                  <\\/div>
+                  <h3 class=\\"text-lg sm:text-xl font-bold text-gray-900 leading-tight break-words\\">{{ item.name }}<\\/h3>
+                <\\/div>
+                <div class=\\"shrink-0 flex items-start\\">
+                  <div class=\\"rounded-lg p-2 sm:p-3 min-w-[70px] sm:min-w-[90px] text-center border transition-colors flex flex-col justify-center\\"
+                    :class=\\"isLowStock(item.stock) ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-100'\\">
+                    <div class=\\"text-[10px] sm:text-xs font-medium mb-1\\" :class=\\"isLowStock(item.stock) ? 'text-amber-600' : 'text-gray-500'\\">
+                      <i class=\\"fa-solid fa-cubes mr-1\\" :class=\\"isLowStock(item.stock) ? 'text-amber-400' : 'text-gray-400'\\"><\\/i>在庫数
+                    <\\/div>
+                    <div class=\\"text-xl sm:text-2xl font-bold\\" :class=\\"isLowStock(item.stock) ? 'text-amber-600' : 'text-gray-800'\\">
+                      {{ item.stock !== '' ? item.stock : '-' }}
+                    <\\/div>
+                  <\\/div>
+                <\\/div>
+              <\\/div>
+              <div class=\\"bg-indigo-50 rounded-lg px-3 py-2.5 border border-indigo-100 flex items-start sm:items-center flex-col sm:flex-row shadow-inner\\">
+                <div class=\\"text-[11px] sm:text-xs text-indigo-500 font-bold whitespace-nowrap mr-3 mb-1 sm:mb-0\\"><i class=\\"fa-solid fa-layer-group mr-1.5 opacity-70\\"><\\/i>棚番:<\\/div>
+                <div class=\\"text-sm sm:text-base font-bold text-indigo-800 break-words leading-tight\\">{{ item.shelf !== '' ? item.shelf : '-' }}<\\/div>
+              <\\/div>
+            <\\/div>
+          <\\/div>
+        <\\/div>
+      <\\/div>
+      <div v-if=\\"alternativeResults.length &gt; 0\\" class=\\"mt-8 fade-in\\" style=\\"animation-delay: 0.3s\\">
+        <div class=\\"flex items-center gap-2 mb-3 px-2\\">
+          <i class=\\"fa-solid fa-code-compare text-teal-500\\"><\\/i>
+          <h2 class=\\"text-md font-bold text-gray-700\\">同じ成分の代替薬 <span class=\\"text-xs font-normal text-gray-400 ml-1\\">（{{ alternativeResults.length }}件）<\\/span><\\/h2>
+        <\\/div>
+        <div class=\\"space-y-3\\">
+          <div v-for=\\"(item, index) in alternativeResults\\" :key=\\"'a'&#43;index\\"
+            class=\\"glass-card rounded-xl p-4 border-l-4 border-teal-400 hover:shadow-md transition-shadow bg-gradient-to-r from-teal-50/30 to-transparent\\"
+            :class=\\"{ 'low-stock-border': isLowStock(item.stock) }\\">
+            <div class=\\"flex justify-between items-start gap-4 mb-3\\">
+              <div class=\\"flex-1 min-w-0 pr-2 pb-1 sm:pb-0\\">
+                <div class=\\"flex items-center gap-2 mb-1 flex-wrap\\">
+                  <span class=\\"text-[10px] font-bold text-teal-700 bg-teal-100 border border-teal-200 rounded px-1.5 py-0.5\\">代替提案<\\/span>
+                  <span v-if=\\"item.type &amp;&amp; item.type.includes('後発')\\" class=\\"text-[10px] font-bold text-teal-700 bg-teal-100 border border-teal-200 rounded px-1.5 py-0.5\\">後発品<\\/span>
+                  <span v-if=\\"item.type &amp;&amp; item.type.includes('先発')\\" class=\\"text-[10px] font-bold text-blue-700 bg-blue-100 border border-blue-200 rounded px-1.5 py-0.5\\">先発品<\\/span>
+                <\\/div>
+                <h3 class=\\"text-base sm:text-lg font-bold text-gray-800 leading-tight break-words\\">{{ item.name }}<\\/h3>
+              <\\/div>
+              <div class=\\"shrink-0 flex items-start\\">
+                <div class=\\"rounded-lg p-2 min-w-[65px] sm:min-w-[80px] text-center border transition-colors flex flex-col justify-center\\"
+                  :class=\\"isLowStock(item.stock) ? 'bg-amber-50 border-amber-200' : 'bg-white border-gray-100'\\">
+                  <div class=\\"text-[10px] font-medium mb-0.5\\" :class=\\"isLowStock(item.stock) ? 'text-amber-600' : 'text-gray-500'\\">在庫<\\/div>
+                  <div class=\\"text-lg sm:text-xl font-bold\\" :class=\\"isLowStock(item.stock) ? 'text-amber-600' : 'text-gray-800'\\">{{ item.stock !== '' ? item.stock : '-' }}<\\/div>
+                <\\/div>
+              <\\/div>
+            <\\/div>
+            <div class=\\"bg-teal-50 rounded-lg px-3 py-2.5 border border-teal-100 flex items-start sm:items-center flex-col sm:flex-row shadow-inner\\">
+              <div class=\\"text-[11px] sm:text-xs text-teal-600 font-bold whitespace-nowrap mr-3 mb-1 sm:mb-0\\"><i class=\\"fa-solid fa-layer-group mr-1.5 opacity-70\\"><\\/i>棚番:<\\/div>
+              <div class=\\"text-sm sm:text-base font-bold text-teal-800 break-words leading-tight\\">{{ item.shelf !== '' ? item.shelf : '-' }}<\\/div>
+            <\\/div>
+          <\\/div>
+        <\\/div>
+      <\\/div>
+      <div v-if=\\"!hasSearched &amp;&amp; !isLoading\\" class=\\"glass-card rounded-2xl p-10 text-center text-gray-400 mt-2\\">
+        <i class=\\"fa-solid fa-magnifying-glass text-4xl mb-4 opacity-20 block\\"><\\/i>
+        <p>上部の検索窓に薬の名前を入力して検索してください<\\/p>
+      <\\/div>
+    <\\/div>
+
+    
+    <div v-if=\\"activeTab === 'shelf'\\">
+      <div v-if=\\"shelfLoading\\" class=\\"glass-card rounded-2xl p-12 text-center\\">
+        <i class=\\"fa-solid fa-circle-notch spinner text-4xl text-indigo-400 block mb-4\\"><\\/i>
+        <p class=\\"text-gray-400\\">棚番データを読み込み中...<\\/p>
+      <\\/div>
+      <div v-else-if=\\"shelfError\\" class=\\"bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg flex items-start\\">
+        <i class=\\"fa-solid fa-triangle-exclamation text-red-500 mt-1 mr-3\\"><\\/i>
+        <p class=\\"text-red-700\\">{{ shelfError }}<\\/p>
+      <\\/div>
+      <div v-else-if=\\"shelfData.length &gt; 0\\">
+        <div class=\\"glass-card rounded-xl p-4 mb-4 flex flex-col gap-3\\">
+          <div class=\\"relative w-full\\">
+            <i class=\\"fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm\\"><\\/i>
+            <input v-model=\\"shelfFilter\\" type=\\"text\\" placeholder=\\"棚番または薬品名で絞り込み...\\"
+              class=\\"w-full pl-9 pr-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-indigo-400 bg-white\\" />
+          <\\/div>
+          <div class=\\"flex flex-wrap items-center gap-2\\">
+            <span class=\\"text-xs font-semibold text-gray-400 mr-1\\">並び替え：<\\/span>
+            <button v-for=\\"opt in sortOptions\\" :key=\\"opt.value\\" @click=\\"shelfSort = opt.value\\"
+              class=\\"text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all\\"
+              :class=\\"shelfSort === opt.value ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-400 hover:text-indigo-600'\\">
+              <i :class=\\"opt.icon\\" class=\\"mr-1\\"><\\/i>{{ opt.label }}
+            <\\/button>
+            <div class=\\"ml-auto flex items-center gap-2\\">
+              <span class=\\"text-xs font-bold text-amber-500 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-0.5\\">{{ lowStockThreshold }}個以下で警告<\\/span>
+              <span class=\\"text-xs font-medium bg-indigo-100 text-indigo-800 py-1 px-3 rounded-full\\">{{ filteredShelfData.length }}グループ / {{ filteredShelfData.length }}棚<\\/span>
+            <\\/div>
+          <\\/div>
+        <\\/div>
+        <div class=\\"space-y-3\\">
+          <div v-for=\\"(group, gi) in hierarchyData\\" :key=\\"gi\\" class=\\"glass-card rounded-xl overflow-hidden shelf-card fade-in\\" :style=\\"'animation-delay:' &#43; (gi * 0.04) &#43; 's'\\">
+            <button class=\\"w-full flex items-center justify-between p-4 bg-indigo-50 hover:bg-indigo-100 transition-colors text-left\\" @click=\\"toggleGroup(gi)\\">
+              <div class=\\"flex items-center gap-3\\">
+                <div class=\\"w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center shrink-0\\">
+                  <i class=\\"fa-solid fa-box-open text-white text-sm\\"><\\/i>
+                <\\/div>
+                <div>
+                  <div class=\\"font-bold text-indigo-800 text-base\\">{{ shelf.shelf }}<\\/div>
+                  <div class=\\"text-xs text-indigo-500 flex items-center gap-2 mt-0.5\\">
+                    <span>{{ [shelf].length }}棚 / {{ group.totalItems }}品目<\\/span>
+                    <span v-if=\\"group.lowStockTotal &gt; 0\\" class=\\"text-amber-600 flex items-center gap-1 low-stock-pulse\\">
+                      <i class=\\"fa-solid fa-triangle-exclamation text-xs\\"><\\/i>在庫わずか {{ group.lowStockTotal }}件
+                    <\\/span>
+                  <\\/div>
+                <\\/div>
+              <\\/div>
+              <i class=\\"fa-solid transition-transform duration-200 text-indigo-400\\" :class=\\"openedGroups.has(gi) ? 'fa-chevron-up' : 'fa-chevron-down'\\"><\\/i>
+            <\\/button>
+            <div v-if=\\"openedGroups.has(gi)\\" class=\\"border-t border-indigo-100 divide-y divide-gray-100\\">
+              <div v-for=\\"(shelf, si) in [shelf]\\" :key=\\"si\\">
+                <button class=\\"w-full flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors text-left\\" @click=\\"toggleShelf(gi &#43; '-' &#43; si)\\">
+                  <div class=\\"flex items-center gap-3\\">
+                    <div class=\\"w-7 h-7 bg-gray-100 rounded-md flex items-center justify-center shrink-0\\">
+                      <i class=\\"fa-solid fa-layer-group text-gray-400 text-xs\\"><\\/i>
+                    <\\/div>
+                    <div>
+                      <div class=\\"font-semibold text-gray-800 text-sm\\">{{ shelf.shelf }}<\\/div>
+                      <div class=\\"text-xs text-gray-400 flex items-center gap-2\\">
+                        <span>{{ shelf.items.length }}品目<\\/span>
+                        <span v-if=\\"shelfLowStockCount(shelf) &gt; 0\\" class=\\"text-amber-500 flex items-center gap-1 low-stock-pulse\\">
+                          <i class=\\"fa-solid fa-triangle-exclamation text-xs\\"><\\/i>わずか {{ shelfLowStockCount(shelf) }}件
+                        <\\/span>
+                      <\\/div>
+                    <\\/div>
+                  <\\/div>
+                  <i class=\\"fa-solid transition-transform duration-200 text-gray-300 text-xs\\" :class=\\"openedShelves.has(gi &#43; '-' &#43; si) ? 'fa-chevron-up' : 'fa-chevron-down'\\"><\\/i>
+                <\\/button>
+                <div v-if=\\"openedShelves.has(gi &#43; '-' &#43; si)\\" class=\\"border-t border-gray-100\\">
+                  <div v-for=\\"(item, ii) in shelf.items\\" :key=\\"ii\\"
+                    class=\\"flex items-center justify-between pl-14 pr-4 py-2.5 hover:bg-gray-50 transition-colors\\"
+                    :class=\\"{ 'bg-amber-50 hover:bg-amber-100': isLowStock(item.stock) }\\">
+                    <div class=\\"flex-1 min-w-0 mr-4\\">
+                      <span class=\\"text-sm text-gray-700 font-medium truncate block\\">{{ item.name }}<\\/span>
+                    <\\/div>
+                    <div class=\\"shrink-0 flex items-center gap-2\\">
+                      <span v-if=\\"isLowStock(item.stock)\\" class=\\"text-xs font-bold text-amber-600 bg-amber-100 border border-amber-200 rounded-full px-2 py-0.5 flex items-center gap-1 low-stock-pulse\\">
+                        <i class=\\"fa-solid fa-triangle-exclamation text-xs\\"><\\/i>わずか
+                      <\\/span>
+                      <span class=\\"font-bold text-base min-w-[44px] text-right\\" :class=\\"isLowStock(item.stock) ? 'text-amber-600' : 'text-gray-700'\\">{{ item.stock !== '' ? item.stock : '-' }}<\\/span>
+                      <span class=\\"text-xs text-gray-400 w-4\\">個<\\/span>
+                    <\\/div>
+                  <\\/div>
+                <\\/div>
+              <\\/div>
+            <\\/div>
+          <\\/div>
+        <\\/div>
+        <div v-if=\\"filteredShelfData.length === 0\\" class=\\"glass-card rounded-2xl p-10 text-center text-gray-400 mt-2\\">
+          <i class=\\"fa-solid fa-filter text-3xl opacity-20 block mb-3\\"><\\/i>
+          <p>「{{ shelfFilter }}」に一致する棚番は見つかりませんでした<\\/p>
+        <\\/div>
+      <\\/div>
+      <div v-else class=\\"glass-card rounded-2xl p-10 text-center text-gray-400\\">
+        <i class=\\"fa-solid fa-layer-group text-4xl opacity-20 block mb-4\\"><\\/i>
+        <p>棚番データがありません。<br>先にデータ更新を実行してください。<\\/p>
+      <\\/div>
+    <\\/div>
+
+    
+    <div v-if=\\"activeTab === 'alert'\\">
+      <div v-if=\\"shelfLoading\\" class=\\"glass-card rounded-2xl p-12 text-center\\">
+        <i class=\\"fa-solid fa-circle-notch spinner text-4xl text-red-400 block mb-4\\"><\\/i>
+        <p class=\\"text-gray-400\\">データを読み込み中...<\\/p>
+      <\\/div>
+      <div v-else>
+        <div class=\\"glass-card rounded-xl p-4 mb-4\\">
+          <div class=\\"flex items-center justify-between mb-2\\">
+            <label class=\\"text-xs font-semibold text-gray-500 flex items-center gap-2\\">
+              <i class=\\"fa-solid fa-triangle-exclamation text-amber-400\\"><\\/i>在庫わずかの基準
+            <\\/label>
+            <span class=\\"text-sm font-bold text-amber-500 bg-amber-50 border border-amber-200 rounded-full px-3 py-0.5\\">{{ lowStockThreshold }} 個以下<\\/span>
+          <\\/div>
+          <input type=\\"range\\" v-model.number=\\"lowStockThreshold\\" min=\\"0\\" max=\\"100\\" step=\\"1\\" />
+          <div class=\\"flex justify-between text-xs text-gray-300 mt-1\\"><span>0<\\/span><span>50<\\/span><span>100<\\/span><\\/div>
+        <\\/div>
+        <div class=\\"flex flex-wrap items-center gap-2 mb-4\\">
+          <span class=\\"text-xs font-semibold text-gray-400 mr-1\\">並び替え：<\\/span>
+          <button v-for=\\"opt in alertSortOptions\\" :key=\\"opt.value\\" @click=\\"alertSort = opt.value\\"
+            class=\\"text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all\\"
+            :class=\\"alertSort === opt.value ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-400 hover:text-indigo-600'\\">
+            <i :class=\\"opt.icon\\" class=\\"mr-1\\"><\\/i>{{ opt.label }}
+          <\\/button>
+        <\\/div>
+        <div class=\\"relative mb-4\\">
+          <i class=\\"fa-solid fa-layer-group absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm\\"><\\/i>
+          <input v-model=\\"alertShelfFilter\\" type=\\"text\\" placeholder=\\"棚番で絞り込み（例：軟軟、センター）...\\"
+            class=\\"w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-indigo-400 bg-white\\" />
+          <button v-if=\\"alertShelfFilter\\" @click=\\"alertShelfFilter = ''\\" class=\\"absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors\\">
+            <i class=\\"fa-solid fa-xmark text-sm\\"><\\/i>
+          <\\/button>
+        <\\/div>
+        <div class=\\"grid grid-cols-2 gap-3 mb-4\\">
+          <div class=\\"glass-card rounded-xl p-4 text-center border-l-4 border-red-500\\">
+            <div class=\\"text-3xl font-black text-red-600\\">{{ alertData.zero.length }}<\\/div>
+            <div class=\\"text-xs font-semibold text-gray-500 mt-1 flex items-center justify-center gap-1\\">
+              <i class=\\"fa-solid fa-circle-xmark text-red-400\\"><\\/i> 在庫ゼロ
+            <\\/div>
+          <\\/div>
+          <div class=\\"glass-card rounded-xl p-4 text-center border-l-4 border-amber-400\\">
+            <div class=\\"text-3xl font-black text-amber-600\\">{{ alertData.low.length }}<\\/div>
+            <div class=\\"text-xs font-semibold text-gray-500 mt-1 flex items-center justify-center gap-1\\">
+              <i class=\\"fa-solid fa-triangle-exclamation text-amber-400\\"><\\/i> 在庫わずか
+            <\\/div>
+          <\\/div>
+        <\\/div>
+      <\\/div>
+      <div v-if=\\"alertData.zero.length &gt; 0\\" class=\\"mb-4\\">
+        <h2 class=\\"text-sm font-bold text-red-600 flex items-center gap-2 mb-2 px-1\\">
+          <i class=\\"fa-solid fa-circle-xmark\\"><\\/i> 在庫ゼロ（{{ alertData.zero.length }}件）
+        <\\/h2>
+        <div class=\\"glass-card rounded-xl overflow-hidden\\">
+          <div v-for=\\"(item, i) in alertData.zero\\" :key=\\"'z'&#43;i\\"
+            class=\\"flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-red-50 transition-colors fade-in\\">
+            <div class=\\"flex-1 min-w-0 mr-3\\">
+              <div class=\\"font-semibold text-gray-800 text-sm truncate\\">{{ item.name }}<\\/div>
+              <div class=\\"text-xs text-gray-400 flex items-center gap-1 mt-0.5\\"><i class=\\"fa-solid fa-layer-group text-xs\\"><\\/i> {{ item.shelf }}<\\/div>
+            <\\/div>
+            <div class=\\"shrink-0 text-xl font-black text-red-600\\">0 <span class=\\"text-xs font-normal text-gray-400\\">個<\\/span><\\/div>
+          <\\/div>
+        <\\/div>
+      <\\/div>
+      <div v-if=\\"alertData.low.length &gt; 0\\">
+        <h2 class=\\"text-sm font-bold text-amber-600 flex items-center gap-2 mb-2 px-1\\">
+          <i class=\\"fa-solid fa-triangle-exclamation\\"><\\/i> 在庫わずか（{{ alertData.low.length }}件）
+        <\\/h2>
+        <div class=\\"glass-card rounded-xl overflow-hidden\\">
+          <div v-for=\\"(item, i) in alertData.low\\" :key=\\"'l'&#43;i\\"
+            class=\\"flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-amber-50 transition-colors fade-in\\">
+            <div class=\\"flex-1 min-w-0 mr-3\\">
+              <div class=\\"font-semibold text-gray-800 text-sm truncate\\">{{ item.name }}<\\/div>
+              <div class=\\"text-xs text-gray-400 flex items-center gap-1 mt-0.5\\"><i class=\\"fa-solid fa-layer-group text-xs\\"><\\/i> {{ item.shelf }}<\\/div>
+            <\\/div>
+            <div class=\\"shrink-0 text-xl font-black text-amber-600\\">{{ item.stock }} <span class=\\"text-xs font-normal text-gray-400\\">個<\\/span><\\/div>
+          <\\/div>
+        <\\/div>
+      <\\/div>
+      <div v-if=\\"alertData.total === 0\\" class=\\"glass-card rounded-2xl p-12 text-center\\">
+        <div class=\\"w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-4\\">
+          <i class=\\"fa-solid fa-circle-check text-4xl text-green-400\\"><\\/i>
+        <\\/div>
+        <h3 class=\\"text-lg font-semibold text-gray-700 mb-1\\">在庫が充足しています<\\/h3>
+        <p class=\\"text-gray-400 text-sm\\">現在、{{ lowStockThreshold }}個以下の薬品はありません。<\\/p>
+      <\\/div>
+    <\\/div>
+
+    
+    <div v-if=\\"activeTab === 'return'\\">
+      <div v-if=\\"returnLoading\\" class=\\"glass-card rounded-2xl p-12 text-center\\">
+        <i class=\\"fa-solid fa-circle-notch spinner text-4xl text-blue-400 block mb-4\\"><\\/i>
+        <p class=\\"text-gray-400\\">返品推奨データを読み込み中...<\\/p>
+      <\\/div>
+      <div v-else-if=\\"returnError\\" class=\\"bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg flex items-start\\">
+        <i class=\\"fa-solid fa-triangle-exclamation text-red-500 mt-1 mr-3\\"><\\/i>
+        <p class=\\"text-red-700\\">{{ returnError }}<\\/p>
+      <\\/div>
+      <div v-else-if=\\"returnData.length &gt; 0\\">
+        <div class=\\"flex justify-between items-center mb-4 px-2\\">
+          <h2 class=\\"text-lg font-bold text-blue-800 flex items-center gap-2\\"><i class=\\"fa-solid fa-rotate-left\\"><\\/i> 返品推奨品リスト<\\/h2>
+          <span class=\\"text-xs font-medium bg-blue-100 text-blue-800 py-1 px-3 rounded-full\\">{{ returnData.length }}件<\\/span>
+        <\\/div>
+        <div class=\\"relative mb-4\\">
+          <i class=\\"fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm\\"><\\/i>
+          <input v-model=\\"returnFilterStr\\" type=\\"text\\" placeholder=\\"棚番・薬品名で絞り込み...\\"
+            class=\\"w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-blue-400 bg-white\\" />
+          <button v-if=\\"returnFilterStr\\" @click=\\"returnFilterStr = ''\\" class=\\"absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors\\">
+            <i class=\\"fa-solid fa-xmark text-sm\\"><\\/i>
+          <\\/button>
+        <\\/div>
+        <div class=\\"glass-card rounded-xl overflow-hidden shadow-sm\\">
+          <div v-for=\\"(item, i) in filteredReturnData\\" :key=\\"i\\"
+            class=\\"px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-blue-50 transition-colors fade-in\\"
+            :style=\\"'animation-delay:' &#43; (i * 0.02) &#43; 's'\\">
+            
+            <div class=\\"flex items-start justify-between gap-3 mb-2\\">
+              <div class=\\"flex-1 min-w-0\\">
+                <div class=\\"font-bold text-gray-800 text-base truncate\\">{{ item.name }}<\\/div>
+                <div class=\\"text-xs text-gray-500 flex items-center gap-1 mt-1 font-medium bg-gray-100 w-fit px-2 py-0.5 rounded\\">
+                  <i class=\\"fa-solid fa-layer-group text-xs text-blue-500\\"><\\/i> {{ item.shelf !== '' ? item.shelf : '-' }}
+                <\\/div>
+              <\\/div>
+              <div class=\\"shrink-0 text-center bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100 min-w-[60px]\\">
+                <div class=\\"text-[10px] text-gray-400 font-bold mb-0.5 uppercase tracking-wide\\">在庫<\\/div>
+                <div class=\\"text-xl font-black text-gray-700\\">{{ item.stock !== '' ? item.stock : '-' }}<\\/div>
+              <\\/div>
+            <\\/div>
+            
+            <div class=\\"flex flex-wrap gap-1.5\\">
+              <span v-if=\\"item.purchasedOn\\" class=\\"inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-100 px-2 py-0.5 rounded-full\\">
+                <i class=\\"fa-solid fa-cart-shopping text-[10px]\\"><\\/i> 購入: {{ item.purchasedOn }}
+              <\\/span>
+              <span v-if=\\"item.expiry\\" class=\\"inline-flex items-center gap-1 text-xs border px-2 py-0.5 rounded-full\\"
+                :class=\\"isExpiringSoon(item.expiry) ? 'bg-red-50 text-red-600 border-red-200 font-bold' : 'bg-orange-50 text-orange-700 border-orange-100'\\">
+                <i class=\\"fa-solid fa-calendar-xmark text-[10px]\\"><\\/i> 期限: {{ item.expiry }}
+                <span v-if=\\"isExpiringSoon(item.expiry)\\" class=\\"text-red-500 text-[10px] font-bold\\">⚠<\\/span>
+              <\\/span>
+              <span v-if=\\"item.lot\\" class=\\"inline-flex items-center gap-1 text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full\\">
+                <i class=\\"fa-solid fa-barcode text-[10px]\\"><\\/i> {{ item.lot }}
+              <\\/span>
+              <span v-if=\\"item.lastDispensed\\" class=\\"inline-flex items-center gap-1 text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full\\">
+                <i class=\\"fa-solid fa-clock text-[10px]\\"><\\/i> 最終調剤: {{ item.lastDispensed }}
+              <\\/span>
+            <\\/div>
+          <\\/div>
+        <\\/div>
+        <div v-if=\\"filteredReturnData.length === 0\\" class=\\"glass-card rounded-2xl p-8 text-center text-gray-400 mt-2\\">
+          <i class=\\"fa-solid fa-filter text-3xl opacity-20 block mb-3\\"><\\/i>
+          <p>絞り込み条件に一致するデータはありません<\\/p>
+        <\\/div>
+      <\\/div>
+      <div v-else class=\\"glass-card rounded-2xl p-10 text-center text-gray-400\\">
+        <i class=\\"fa-solid fa-rotate-left text-4xl opacity-20 block mb-4\\"><\\/i>
+        <p>返品推奨品のデータがありません。<br>先にデータ自動取得を実行してください。<\\/p>
+      <\\/div>
+    <\\/div>
+
+    
+    <div v-if=\\"activeTab === 'dead'\\">
+      <div v-if=\\"deadLoading\\" class=\\"glass-card rounded-2xl p-12 text-center\\">
+        <i class=\\"fa-solid fa-circle-notch spinner text-4xl text-purple-400 block mb-4\\"><\\/i>
+        <p class=\\"text-gray-400\\">不動在庫データを読み込み中...<\\/p>
+      <\\/div>
+      <div v-else-if=\\"deadError\\" class=\\"bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg flex items-start\\">
+        <i class=\\"fa-solid fa-triangle-exclamation text-red-500 mt-1 mr-3\\"><\\/i>
+        <p class=\\"text-red-700\\">{{ deadError }}<\\/p>
+      <\\/div>
+      <div v-else-if=\\"deadData.length &gt; 0\\">
+        <div class=\\"flex justify-between items-center mb-4 px-2\\">
+          <h2 class=\\"text-lg font-bold text-purple-800 flex items-center gap-2\\"><i class=\\"fa-solid fa-ghost\\"><\\/i> 不動在庫の可能性<\\/h2>
+          <span class=\\"text-xs font-medium bg-purple-100 text-purple-800 py-1 px-3 rounded-full\\">{{ deadData.length }}件<\\/span>
+        <\\/div>
+        <div class=\\"relative mb-4\\">
+          <i class=\\"fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm\\"><\\/i>
+          <input v-model=\\"deadFilterStr\\" type=\\"text\\" placeholder=\\"棚番・薬品名で絞り込み...\\"
+            class=\\"w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-purple-400 bg-white\\" />
+          <button v-if=\\"deadFilterStr\\" @click=\\"deadFilterStr = ''\\" class=\\"absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors\\">
+            <i class=\\"fa-solid fa-xmark text-sm\\"><\\/i>
+          <\\/button>
+        <\\/div>
+        <div class=\\"glass-card rounded-xl overflow-hidden shadow-sm\\">
+          <div v-for=\\"(item, i) in filteredDeadData\\" :key=\\"i\\"
+            class=\\"px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-purple-50 transition-colors fade-in\\"
+            :style=\\"'animation-delay:' &#43; (i * 0.02) &#43; 's'\\">
+            
+            <div class=\\"flex items-start justify-between gap-3 mb-2\\">
+              <div class=\\"flex-1 min-w-0\\">
+                <div class=\\"font-bold text-gray-800 text-base truncate\\">{{ item.name }}<\\/div>
+                <div class=\\"text-xs text-gray-500 flex items-center gap-1 mt-1 font-medium bg-gray-100 w-fit px-2 py-0.5 rounded\\">
+                  <i class=\\"fa-solid fa-layer-group text-xs text-purple-500\\"><\\/i> {{ item.shelf !== '' ? item.shelf : '-' }}
+                <\\/div>
+              <\\/div>
+              <div class=\\"shrink-0 text-center bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100 min-w-[60px]\\">
+                <div class=\\"text-[10px] text-gray-400 font-bold mb-0.5 uppercase tracking-wide\\">在庫<\\/div>
+                <div class=\\"text-xl font-black text-gray-700\\">{{ item.stock !== '' ? item.stock : '-' }}<\\/div>
+              <\\/div>
+            <\\/div>
+            
+            <div class=\\"flex flex-wrap gap-1.5\\">
+              <span v-if=\\"item.purchasedOn\\" class=\\"inline-flex items-center gap-1 text-xs bg-purple-50 text-purple-700 border border-purple-100 px-2 py-0.5 rounded-full\\">
+                <i class=\\"fa-solid fa-cart-shopping text-[10px]\\"><\\/i> 購入: {{ item.purchasedOn }}
+              <\\/span>
+              <span v-if=\\"item.expiry\\" class=\\"inline-flex items-center gap-1 text-xs border px-2 py-0.5 rounded-full\\"
+                :class=\\"isExpiringSoon(item.expiry) ? 'bg-red-50 text-red-600 border-red-200 font-bold' : 'bg-orange-50 text-orange-700 border-orange-100'\\">
+                <i class=\\"fa-solid fa-calendar-xmark text-[10px]\\"><\\/i> 期限: {{ item.expiry }}
+                <span v-if=\\"isExpiringSoon(item.expiry)\\" class=\\"text-red-500 text-[10px] font-bold\\">⚠<\\/span>
+              <\\/span>
+              <span v-if=\\"item.lot\\" class=\\"inline-flex items-center gap-1 text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full\\">
+                <i class=\\"fa-solid fa-barcode text-[10px]\\"><\\/i> {{ item.lot }}
+              <\\/span>
+              <span v-if=\\"item.lastDispensed\\" class=\\"inline-flex items-center gap-1 text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full\\">
+                <i class=\\"fa-solid fa-clock text-[10px]\\"><\\/i> 最終調剤: {{ item.lastDispensed }}
+              <\\/span>
+            <\\/div>
+          <\\/div>
+        <\\/div>
+        <div v-if=\\"filteredDeadData.length === 0\\" class=\\"glass-card rounded-2xl p-8 text-center text-gray-400 mt-2\\">
+          <i class=\\"fa-solid fa-filter text-3xl opacity-20 block mb-3\\"><\\/i>
+          <p>絞り込み条件に一致するデータはありません<\\/p>
+        <\\/div>
+      <\\/div>
+      <div v-else class=\\"glass-card rounded-2xl p-10 text-center text-gray-400\\">
+        <i class=\\"fa-solid fa-ghost text-4xl opacity-20 block mb-4\\"><\\/i>
+        <p>不動在庫のデータがありません。<br>先にデータ自動取得を実行してください。<\\/p>
+      <\\/div>
+    <\\/div>
+
+    
+    <div v-if=\\"activeTab === 'live'\\">
+      
+      <div v-if=\\"liveLoading\\">
+        <div class=\\"flex justify-between items-center mb-3 px-2\\">
+          <div class=\\"flex items-center gap-2\\">
+            <div class=\\"h-5 w-32 bg-gray-200 rounded animate-pulse\\"><\\/div>
+            <div class=\\"h-5 w-16 bg-gray-100 rounded-full animate-pulse\\"><\\/div>
+          <\\/div>
+          <div class=\\"h-5 w-10 bg-gray-100 rounded animate-pulse\\"><\\/div>
+        <\\/div>
+        <div class=\\"glass-card rounded-xl px-3 py-2 mb-3 h-9 bg-gray-50 animate-pulse\\"><\\/div>
+        <div class=\\"space-y-2\\">
+          <div v-for=\\"n in 8\\" :key=\\"n\\" class=\\"glass-card rounded-xl p-3 flex items-center gap-3\\">
+            <div class=\\"flex-1 space-y-2\\">
+              <div class=\\"h-4 bg-gray-200 rounded animate-pulse w-3/4\\"><\\/div>
+              <div class=\\"flex gap-1.5\\">
+                <div class=\\"h-3 w-16 bg-gray-100 rounded animate-pulse\\"><\\/div>
+                <div class=\\"h-3 w-20 bg-gray-100 rounded animate-pulse\\"><\\/div>
+              <\\/div>
+            <\\/div>
+            <div class=\\"shrink-0 bg-gray-100 rounded-lg px-3 py-1.5 w-[60px] h-[52px] animate-pulse\\"><\\/div>
+          <\\/div>
+        <\\/div>
+        <p class=\\"text-center text-xs text-gray-400 mt-4 flex items-center justify-center gap-1\\">
+          <i class=\\"fa-solid fa-circle-notch spinner\\"><\\/i> MedOrderからデータ取得中...
+        <\\/p>
+      <\\/div>
+      <div v-else-if=\\"liveError\\" class=\\"bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg\\">
+        <p class=\\"text-red-700 font-semibold\\"><i class=\\"fa-solid fa-triangle-exclamation mr-2\\"><\\/i>{{ liveError }}<\\/p>
+        <p class=\\"text-red-500 text-sm mt-1\\">extract_data.pyを実行してトークンを更新してください。<\\/p>
+      <\\/div>
+      <div v-else-if=\\"liveData.length &gt; 0\\">
+        <div class=\\"flex justify-between items-center mb-3 px-2\\">
+          <div class=\\"flex items-center gap-2 flex-wrap\\">
+            <span class=\\"text-green-600 font-bold\\"><i class=\\"fa-solid fa-satellite-dish\\"><\\/i> リアルタイム在庫<\\/span>
+            <span class=\\"bg-green-100 text-green-700 text-xs font-bold px-2 py-0.5 rounded-full\\">全{{ liveTotalCount }}件<\\/span>
+            <span v-if=\\"minusStockItems.length &gt; 0\\"
+              class=\\"bg-rose-100 text-rose-700 text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1 cursor-pointer hover:bg-rose-200 transition-colors\\"
+              @click=\\"switchToMinusTab\\">
+              <i class=\\"fa-solid fa-circle-minus text-xs\\"><\\/i>マイナス {{ minusStockItems.length }}件
+            <\\/span>
+            
+            <span v-if=\\"liveFromCache\\" class=\\"text-[11px] text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1\\">
+              <i class=\\"fa-solid fa-database text-[10px]\\"><\\/i> キャッシュ {{ liveCachedAtStr }}
+            <\\/span>
+            <span v-else-if=\\"liveCachedAtStr\\" class=\\"text-[11px] text-green-600 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full flex items-center gap-1\\">
+              <i class=\\"fa-solid fa-bolt text-[10px]\\"><\\/i> 取得 {{ liveCachedAtStr }}
+            <\\/span>
+          <\\/div>
+          <div class=\\"flex items-center gap-2\\">
+            
+            <button v-if=\\"liveFromCache\\" @click=\\"forceReloadLive\\"
+              :disabled=\\"liveLoading\\"
+              class=\\"text-xs text-amber-600 hover:text-amber-800 border border-amber-200 rounded-lg px-2 py-1 flex items-center gap-1 hover:bg-amber-50 transition-colors\\">
+              <i class=\\"fa-solid fa-arrows-rotate\\" :class=\\"{'spinner': liveLoading}\\"><\\/i> 最新取得
+            <\\/button>
+            <button v-else @click=\\"loadLiveData(livePage)\\" class=\\"text-xs text-green-600 hover:text-green-800 flex items-center gap-1\\">
+              <i class=\\"fa-solid fa-arrows-rotate\\"><\\/i> 更新
+            <\\/button>
+          <\\/div>
+        <\\/div>
+        <div class=\\"glass-card rounded-xl px-3 py-2 mb-3 flex items-center gap-2\\">
+          <i class=\\"fa-solid fa-filter text-green-400 text-xs\\"><\\/i>
+          <input v-model=\\"liveFilterStr\\" type=\\"text\\" placeholder=\\"薬品名・YJコードで絞り込み...\\"
+            class=\\"flex-1 bg-transparent text-sm outline-none text-gray-700 placeholder-gray-400\\" />
+        <\\/div>
+        <div class=\\"space-y-2\\">
+          <div v-for=\\"item in filteredLiveData\\" :key=\\"item.id\\"
+            class=\\"glass-card rounded-xl p-3 flex items-center gap-3 hover:shadow-md transition-shadow\\"
+            :class=\\"{ 'border-l-4 border-rose-500 bg-rose-50/30': item.quantity &lt; 0 }\\">
+            <div class=\\"flex-1 min-w-0\\">
+              <div class=\\"font-bold text-gray-800 text-sm truncate\\">{{ item.name || '不明' }}<\\/div>
+              <div class=\\"flex flex-wrap gap-1.5 mt-1\\">
+                <span v-if=\\"item.yj_code\\" class=\\"text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-mono\\">{{ item.yj_code }}<\\/span>
+                <span v-if=\\"item.lot\\" class=\\"text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded\\">
+                  <i class=\\"fa-solid fa-barcode text-[10px]\\"><\\/i> {{ item.lot }}
+                <\\/span>
+                <span v-if=\\"item.expiry\\" class=\\"text-xs bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded\\">
+                  <i class=\\"fa-solid fa-calendar text-[10px]\\"><\\/i> {{ item.expiry }}
+                <\\/span>
+                <span v-if=\\"item.last_action\\" class=\\"text-xs px-1.5 py-0.5 rounded\\"
+                  :class=\\"item.last_action === 'dispense' ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'\\">
+                  {{ item.last_action === 'dispense' ? '払出' : item.last_action === 'stock' ? '入庫' : item.last_action }}
+                <\\/span>
+                <span v-if=\\"item.nextDelivery\\" class=\\"text-xs bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded\\">
+                  <i class=\\"fa-solid fa-truck text-[10px]\\"><\\/i> 発注中{{ item.nextDelivery }}
+                <\\/span>
+              <\\/div>
+            <\\/div>
+            <div class=\\"shrink-0 text-center bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100 min-w-[60px]\\"
+              :class=\\"{ 'bg-rose-50 border-rose-200': item.quantity &lt; 0 }\\">
+              <div class=\\"text-[10px] font-bold mb-0.5 uppercase\\" :class=\\"item.quantity &lt; 0 ? 'text-rose-500' : 'text-gray-400'\\">在庫<\\/div>
+              <div class=\\"text-xl font-black\\"
+                :class=\\"item.quantity &lt; 0 ? 'text-rose-600' : item.quantity === 0 ? 'text-red-500' : item.quantity &lt;= 10 ? 'text-orange-500' : 'text-gray-700'\\">
+                {{ item.quantity }}
+              <\\/div>
+            <\\/div>
+          <\\/div>
+        <\\/div>
+        <div v-if=\\"liveTotalPages &gt; 1\\" class=\\"flex justify-center items-center gap-4 mt-4 pt-3 border-t border-gray-100\\">
+          <button @click=\\"livePrevPage\\" :disabled=\\"livePage &lt;= 1\\"
+            class=\\"px-3 py-1.5 rounded-lg text-sm font-semibold\\"
+            :class=\\"livePage &lt;= 1 ? 'text-gray-300 cursor-not-allowed' : 'text-green-600 hover:bg-green-50'\\">
+            <i class=\\"fa-solid fa-chevron-left\\"><\\/i> 前へ
+          <\\/button>
+          <span class=\\"text-sm text-gray-500\\">{{ livePage }} / {{ liveTotalPages }} ページ<\\/span>
+          <button @click=\\"liveNextPage\\" :disabled=\\"livePage &gt;= liveTotalPages\\"
+            class=\\"px-3 py-1.5 rounded-lg text-sm font-semibold\\"
+            :class=\\"livePage &gt;= liveTotalPages ? 'text-gray-300 cursor-not-allowed' : 'text-green-600 hover:bg-green-50'\\">
+            次へ <i class=\\"fa-solid fa-chevron-right\\"><\\/i>
+          <\\/button>
+        <\\/div>
+      <\\/div>
+      <div v-else class=\\"glass-card rounded-2xl p-10 text-center text-gray-400\\">
+        <i class=\\"fa-solid fa-satellite-dish text-4xl opacity-20 block mb-4\\"><\\/i>
+        <p>データがありません。<br>extract_data.pyを実行してトークンを設定してください。<\\/p>
+      <\\/div>
+    <\\/div>
+
+    
+    <div v-if=\\"activeTab === 'minus'\\">
+      <div v-if=\\"liveLoading\\" class=\\"glass-card rounded-2xl p-12 text-center\\">
+        <i class=\\"fa-solid fa-circle-notch spinner text-4xl text-rose-500 block mb-4\\"><\\/i>
+        <p class=\\"text-gray-400\\">データを取得中...<\\/p>
+      <\\/div>
+      <div v-else-if=\\"liveError\\" class=\\"bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg\\">
+        <p class=\\"text-red-700 font-semibold\\"><i class=\\"fa-solid fa-triangle-exclamation mr-2\\"><\\/i>{{ liveError }}<\\/p>
+        <p class=\\"text-red-500 text-sm mt-1\\">extract_data.pyを実行してトークンを更新してください。<\\/p>
+      <\\/div>
+      <div v-else>
+        
+        <div class=\\"flex justify-between items-center mb-4 px-1\\">
+          <div>
+            <h2 class=\\"text-lg font-bold text-rose-700 flex items-center gap-2\\">
+              <i class=\\"fa-solid fa-circle-minus\\"><\\/i> マイナス在庫一覧
+            <\\/h2>
+            <p class=\\"text-xs text-gray-400 mt-0.5\\">RTタブのデータに基づきます。RTタブで更新後、再度確認してください。<\\/p>
+          <\\/div>
+          <button @click=\\"loadLiveData(1)\\" class=\\"text-xs text-rose-600 hover:text-rose-800 flex items-center gap-1 border border-rose-200 rounded-lg px-3 py-1.5 hover:bg-rose-50 transition-colors\\">
+            <i class=\\"fa-solid fa-arrows-rotate\\"><\\/i> 再取得
+          <\\/button>
+        <\\/div>
+
+        
+        <div class=\\"grid grid-cols-2 gap-3 mb-4\\" v-if=\\"minusStockItems.length &gt; 0\\">
+          <div class=\\"glass-card rounded-xl p-4 text-center border-l-4 border-rose-600\\">
+            <div class=\\"text-3xl font-black text-rose-700\\">{{ minusStockItems.length }}<\\/div>
+            <div class=\\"text-xs font-semibold text-gray-500 mt-1 flex items-center justify-center gap-1\\">
+              <i class=\\"fa-solid fa-circle-minus text-rose-500\\"><\\/i> マイナス品目数
+            <\\/div>
+          <\\/div>
+          <div class=\\"glass-card rounded-xl p-4 text-center border-l-4 border-rose-300\\">
+            <div class=\\"text-3xl font-black text-rose-600\\">{{ minusTotalQuantity }}<\\/div>
+            <div class=\\"text-xs font-semibold text-gray-500 mt-1 flex items-center justify-center gap-1\\">
+              <i class=\\"fa-solid fa-calculator text-rose-400\\"><\\/i> 合計マイナス数量
+            <\\/div>
+          <\\/div>
+        <\\/div>
+
+        
+        <div class=\\"flex flex-wrap items-center gap-2 mb-3\\" v-if=\\"minusStockItems.length &gt; 0\\">
+          <span class=\\"text-xs font-semibold text-gray-400 mr-1\\">並び替え：<\\/span>
+          <button v-for=\\"opt in minusSortOptions\\" :key=\\"opt.value\\" @click=\\"minusSort = opt.value\\"
+            class=\\"text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all\\"
+            :class=\\"minusSort === opt.value ? 'bg-rose-600 text-white border-rose-600 shadow-sm' : 'bg-white text-gray-500 border-gray-200 hover:border-rose-400 hover:text-rose-600'\\">
+            <i :class=\\"opt.icon\\" class=\\"mr-1\\"><\\/i>{{ opt.label }}
+          <\\/button>
+        <\\/div>
+
+        
+        <div v-if=\\"sortedMinusStockItems.length &gt; 0\\" class=\\"glass-card rounded-xl overflow-hidden shadow-sm\\">
+          <div v-for=\\"(item, i) in sortedMinusStockItems\\" :key=\\"item.id\\"
+            class=\\"flex items-center justify-between px-4 py-3.5 border-b border-gray-100 last:border-0 hover:bg-rose-50 transition-colors fade-in\\"
+            :style=\\"'animation-delay:' &#43; (i * 0.03) &#43; 's'\\">
+            <div class=\\"flex-1 min-w-0 mr-3\\">
+              <div class=\\"font-bold text-gray-800 text-sm truncate\\">{{ item.name }}<\\/div>
+              <div class=\\"flex flex-wrap gap-1.5 mt-1\\">
+                <span v-if=\\"item.lot\\" class=\\"text-xs bg-blue-50 text-blue-500 px-1.5 py-0.5 rounded\\">
+                  <i class=\\"fa-solid fa-barcode text-[10px]\\"><\\/i> {{ item.lot }}
+                <\\/span>
+                <span v-if=\\"item.expiry\\" class=\\"text-xs bg-orange-50 text-orange-500 px-1.5 py-0.5 rounded\\">
+                  <i class=\\"fa-solid fa-calendar text-[10px]\\"><\\/i> {{ item.expiry }}
+                <\\/span>
+                <span v-if=\\"item.last_acted_at\\" class=\\"text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded\\">
+                  <i class=\\"fa-solid fa-clock text-[10px]\\"><\\/i> {{ formatActedAt(item.last_acted_at) }}
+                <\\/span>
+                <span v-if=\\"item.last_action\\" class=\\"text-xs px-1.5 py-0.5 rounded\\"
+                  :class=\\"item.last_action === 'dispense' ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'\\">
+                  {{ item.last_action === 'dispense' ? '払出' : item.last_action === 'stock' ? '入庫' : item.last_action }}
+                <\\/span>
+              <\\/div>
+            <\\/div>
+            <div class=\\"shrink-0 text-center bg-rose-50 px-3 py-2 rounded-lg border border-rose-200 min-w-[70px]\\">
+              <div class=\\"text-[10px] text-rose-500 font-bold mb-0.5 uppercase\\">在庫<\\/div>
+              <div class=\\"text-2xl font-black text-rose-700\\">{{ item.quantity }}<\\/div>
+            <\\/div>
+          <\\/div>
+        <\\/div>
+
+        
+        <div v-else-if=\\"!liveLoading &amp;&amp; liveData.length === 0\\" class=\\"glass-card rounded-2xl p-12 text-center\\">
+          <div class=\\"w-20 h-20 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4\\">
+            <i class=\\"fa-solid fa-satellite-dish text-3xl text-rose-300\\"><\\/i>
+          <\\/div>
+          <h3 class=\\"text-base font-semibold text-gray-600 mb-2\\">RTデータが未取得です<\\/h3>
+          <p class=\\"text-gray-400 text-sm mb-4\\">先にRTタブを開いてデータを取得してください。<\\/p>
+          <button @click=\\"switchToLiveTab\\" class=\\"inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-lg hover:bg-green-700 transition-colors\\">
+            <i class=\\"fa-solid fa-satellite-dish\\"><\\/i> RTタブへ移動
+          <\\/button>
+        <\\/div>
+
+        
+        <div v-else-if=\\"minusStockItems.length === 0\\" class=\\"glass-card rounded-2xl p-12 text-center\\">
+          <div class=\\"w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-4\\">
+            <i class=\\"fa-solid fa-circle-check text-4xl text-green-400\\"><\\/i>
+          <\\/div>
+          <h3 class=\\"text-lg font-semibold text-gray-700 mb-1\\">マイナス在庫はありません<\\/h3>
+          <p class=\\"text-gray-400 text-sm\\">全品目の在庫数が0以上です。<\\/p>
+        <\\/div>
+      <\\/div>
+    <\\/div>
+
+  <\\/main>
+
+  <footer class=\\"mt-auto pt-10 pb-4 text-center text-xs text-gray-400\\">
+    <p>薬の在庫・棚番検索システム<\\/p>
+  <\\/footer>
+<\\/div>
+
+<script>
+  const { createApp, ref, computed, reactive, onMounted } = Vue;
+
+  createApp({
+    setup() {
+      const activeTab = ref('search');
+      const lastUpdated = ref('');
+      const lowStockThreshold = ref(10);
+
+      const isLowStock = (stock) => {
+        const num = parseFloat(stock);
+        return !isNaN(num) && num <= lowStockThreshold.value;
+      };
+
+      const getShelfWeight = (shelfName) => {
+        if (!shelfName) return 999;
+        const order = ['汎用左','汎用右','引出し','汎用横','ｾﾝﾀｰ 下','ｾﾝﾀｰ 下 右','軟膏','ｻｰﾊﾞｰ下','ｸﾗｲｱﾝﾄ下','天秤下'];
+        let bestIdx = 999, maxLen = 0;
+        for (let i = 0; i < order.length; i++) {
+          if (shelfName.includes(order[i]) && order[i].length > maxLen) { bestIdx = i; maxLen = order[i].length; }
+        }
+        return bestIdx;
+      };
+
+      
+      const searchQuery = ref('');
+      const lastSearchedQuery = ref('');
+      const results = ref([]);
+      const isLoading = ref(false);
+      const hasSearched = ref(false);
+      const errorMsg = ref('');
+
+      const primaryResults = computed(() => results.value.filter(i => i.isPrimary !== false));
+      const alternativeResults = computed(() => results.value.filter(i => i.isPrimary === false));
+      const lowStockCount = computed(() => primaryResults.value.filter(i => isLowStock(i.stock)).length);
+
+      
+      
+      const historyMap = reactive({});
+      const HISTORY_MAX = 20;    
+      const TOP_MIN_COUNT = 3;   
+      const TOP_MAX = 3;         
+      const RECENT_MAX = 8;      
+
+      
+      const recordHistory = (query) => {
+        const q = query.trim();
+        if (!q) return;
+        if (historyMap[q]) {
+          historyMap[q].count++;
+          historyMap[q].lastUsed = Date.now();
+        } else {
+          
+          const keys = Object.keys(historyMap);
+          if (keys.length >= HISTORY_MAX) {
+            const oldest = keys.reduce((a, b) => historyMap[a].lastUsed < historyMap[b].lastUsed ? a : b);
+            delete historyMap[oldest];
+          }
+          historyMap[q] = { count: 1, lastUsed: Date.now() };
+        }
+      };
+
+      
+      const topSearches = computed(() =>
+        Object.entries(historyMap)
+          .filter(([, v]) => v.count >= TOP_MIN_COUNT)
+          .sort(([, a], [, b]) => b.count - a.count)
+          .slice(0, TOP_MAX)
+          .map(([query, v]) => ({ query, count: v.count }))
+      );
+
+      
+      const recentSearches = computed(() => {
+        const topSet = new Set(topSearches.value.map(i => i.query));
+        return Object.entries(historyMap)
+          .filter(([q]) => !topSet.has(q))
+          .sort(([, a], [, b]) => b.lastUsed - a.lastUsed)
+          .slice(0, RECENT_MAX)
+          .map(([query, v]) => ({ query, count: v.count }));
+      });
+
+      
+      const applyHistoryQuery = (query) => {
+        searchQuery.value = query;
+        performSearch();
+      };
+
+      
+      const clearHistory = () => {
+        Object.keys(historyMap).forEach(k => delete historyMap[k]);
+      };
+      
+
+      const performSearch = () => {
+        const query = searchQuery.value.trim();
+        if (!query) return;
+        isLoading.value = true; errorMsg.value = ''; lastSearchedQuery.value = query;
+        recordHistory(query); 
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run
+            .withSuccessHandler((data) => { results.value = data; isLoading.value = false; hasSearched.value = true; })
+            .withFailureHandler((err) => { errorMsg.value = 'エラー: ' + err.message; isLoading.value = false; hasSearched.value = true; results.value = []; })
+            .searchMedicine(query);
+        } else {
+          setTimeout(() => {
+            results.value = [
+              { name: 'オルガドロン点眼液0.1%', stock: 3, shelf: '軟膏-1 0-4', isPrimary: true, type: '先発品' },
+              { name: '代替ダミー点眼液0.1%', stock: 50, shelf: '汎用-1', isPrimary: false, type: '後発品' }
+            ].filter(i => i.name.toLowerCase().includes(query.toLowerCase()) || !i.isPrimary);
+            isLoading.value = false; hasSearched.value = true;
+          }, 700);
+        }
+      };
+      const clearSearch = () => { searchQuery.value = ''; document.getElementById('search').focus(); };
+
+      
+      const shelfData = ref([]);
+      const shelfLoading = ref(false);
+      const shelfError = ref('');
+      const shelfFilter = ref('');
+      const openedShelves = reactive(new Set());
+      const openedGroups = reactive(new Set());
+      let shelfLoaded = false;
+      const shelfSort = ref('name');
+      const sortOptions = [
+        { value: 'name', label: '棚番順', icon: 'fa-solid fa-arrow-down-a-z' },
+        { value: 'lowstock', label: '在庫わずか順', icon: 'fa-solid fa-triangle-exclamation' },
+        { value: 'count', label: '品目数順', icon: 'fa-solid fa-list-ol' },
+      ];
+      const shelfLowStockCount = (shelf) => shelf.items.filter(i => isLowStock(i.stock)).length;
+      const filteredShelfData = computed(() => {
+        let data = shelfData.value;
+        if (shelfFilter.value.trim()) {
+          const q = shelfFilter.value.toLowerCase();
+          data = data.filter(s => s.shelf.toLowerCase().includes(q) || s.items.some(i => i.name.toLowerCase().includes(q)));
+        }
+        return [...data].sort((a, b) => {
+          if (shelfSort.value === 'lowstock') return shelfLowStockCount(b) - shelfLowStockCount(a);
+          if (shelfSort.value === 'count') return b.items.length - a.items.length;
+          const wA = getShelfWeight(a.shelf), wB = getShelfWeight(b.shelf);
+          return wA !== wB ? wA - wB : a.shelf.localeCompare(b.shelf, 'ja');
+        });
+      });
+      const hierarchyData = computed(() => {
+        const groupMap = {};
+        filteredShelfData.value.forEach(shelf => {
+          const dashIdx = shelf.shelf.indexOf('-');
+          const groupName = dashIdx > -1 ? shelf.shelf.slice(0, dashIdx) : shelf.shelf;
+          if (!groupMap[groupName]) groupMap[groupName] = { groupName, shelves: [], totalItems: 0, lowStockTotal: 0 };
+          groupMap[groupName].shelves.push(shelf);
+          groupMap[groupName].totalItems += shelf.items.length;
+          groupMap[groupName].lowStockTotal += shelfLowStockCount(shelf);
+        });
+        const groups = Object.values(groupMap);
+        if (shelfSort.value === 'lowstock') groups.sort((a, b) => b.lowStockTotal - a.lowStockTotal);
+        else if (shelfSort.value === 'count') groups.sort((a, b) => b.totalItems - a.totalItems);
+        else groups.sort((a, b) => { const wA = getShelfWeight(a.groupName), wB = getShelfWeight(b.groupName); return wA !== wB ? wA - wB : a.groupName.localeCompare(b.groupName, 'ja'); });
+        return groups;
+      });
+      const toggleShelf = (idx) => { if (openedShelves.has(idx)) openedShelves.delete(idx); else openedShelves.add(idx); };
+      const toggleGroup = (gi) => { if (openedGroups.has(gi)) openedGroups.delete(gi); else openedGroups.add(gi); };
+      const loadShelfData = () => {
+        if (shelfLoaded) return;
+        shelfLoaded = true; shelfLoading.value = true; shelfError.value = '';
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run
+            .withSuccessHandler((data) => { shelfData.value = data; shelfLoading.value = false; })
+            .withFailureHandler((err) => { shelfError.value = 'データ取得エラー: ' + err.message; shelfLoading.value = false; })
+            .getShelfSummary();
+        } else {
+          setTimeout(() => {
+            shelfData.value = [
+              { shelf: '軟膏-1 0-4', items: [{ name: 'オルガドロン点眼液0.1%', stock: 3 }] },
+              { shelf: 'センター右下-4', items: [{ name: 'ペリンドプリル錠2mg', stock: 0 }, { name: 'アムロジピン錠5mg', stock: 60 }] },
+            ];
+            shelfLoading.value = false;
+          }, 800);
+        }
+      };
+      const switchToShelfTab = () => { activeTab.value = 'shelf'; loadShelfData(); };
+
+      const fetchLastUpdated = () => {
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run
+            .withSuccessHandler((val) => { lastUpdated.value = val; })
+            .withFailureHandler(() => { lastUpdated.value = '取得失敗'; })
+            .getLastUpdated();
+        } else { lastUpdated.value = '2026/03/09 02:00（モック）'; }
+      };
+
+      onMounted(() => { document.getElementById('search')?.focus(); fetchLastUpdated(); });
+
+      
+      const alertShelfFilter = ref('');
+      const alertSort = ref('shelf');
+      const alertSortOptions = [
+        { value: 'stock', label: '在庫数順', icon: 'fa-solid fa-arrow-up-1-9' },
+        { value: 'name', label: '医薬品名順', icon: 'fa-solid fa-arrow-down-a-z' },
+        { value: 'shelf', label: '棚番順', icon: 'fa-solid fa-layer-group' },
+      ];
+      const sortAlertItems = (arr) => [...arr].sort((a, b) => {
+        if (alertSort.value === 'name') return a.name.localeCompare(b.name, 'ja');
+        if (alertSort.value === 'shelf') { const wA = getShelfWeight(a.shelf), wB = getShelfWeight(b.shelf); return wA !== wB ? wA - wB : a.shelf.localeCompare(b.shelf, 'ja'); }
+        return a.stock - b.stock;
+      });
+      const alertData = computed(() => {
+        const zero = [], low = [];
+        const shelfQ = alertShelfFilter.value.toLowerCase();
+        shelfData.value.forEach(shelf => {
+          if (shelfQ && !shelf.shelf.toLowerCase().includes(shelfQ)) return;
+          shelf.items.forEach(item => {
+            const num = parseFloat(item.stock);
+            if (isNaN(num)) return;
+            const entry = { name: item.name, stock: num, shelf: shelf.shelf };
+            if (num === 0) zero.push(entry);
+            else if (num <= lowStockThreshold.value) low.push(entry);
+          });
+        });
+        return { zero: sortAlertItems(zero), low: sortAlertItems(low), total: zero.length + low.length };
+      });
+      const switchToAlertTab = () => { activeTab.value = 'alert'; loadShelfData(); };
+
+      
+      const returnData = ref([]);
+      const returnLoading = ref(false);
+      const returnError = ref('');
+      const returnFilterStr = ref('');
+      let returnLoaded = false;
+      const filteredReturnData = computed(() => {
+        if (!returnFilterStr.value.trim()) return returnData.value;
+        const q = returnFilterStr.value.toLowerCase();
+        return returnData.value.filter(i => i.name.toLowerCase().includes(q) || i.shelf.toLowerCase().includes(q));
+      });
+      const loadReturnData = () => {
+        if (returnLoaded) return;
+        returnLoaded = true; returnLoading.value = true; returnError.value = '';
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run
+            .withSuccessHandler((data) => { returnData.value = data; returnLoading.value = false; })
+            .withFailureHandler((err) => { returnError.value = 'データ取得エラー: ' + err.message; returnLoading.value = false; })
+            .getReturnRecommended();
+        } else {
+          setTimeout(() => { returnData.value = [{ name: 'アレンドロン酸錠35mg', stock: 100, shelf: '引出し-A' }]; returnLoading.value = false; }, 800);
+        }
+      };
+      const switchToReturnTab = () => { activeTab.value = 'return'; loadReturnData(); };
+
+      
+      const deadData = ref([]);
+      const deadLoading = ref(false);
+      const deadError = ref('');
+      const deadFilterStr = ref('');
+      let deadLoaded = false;
+      const filteredDeadData = computed(() => {
+        if (!deadFilterStr.value.trim()) return deadData.value;
+        const q = deadFilterStr.value.toLowerCase();
+        return deadData.value.filter(i => i.name.toLowerCase().includes(q) || i.shelf.toLowerCase().includes(q));
+      });
+      const loadDeadData = () => {
+        if (deadLoaded) return;
+        deadLoaded = true; deadLoading.value = true; deadError.value = '';
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run
+            .withSuccessHandler((data) => { deadData.value = data; deadLoading.value = false; })
+            .withFailureHandler((err) => { deadError.value = 'データ取得エラー: ' + err.message; deadLoading.value = false; })
+            .getPotentialDeadStock();
+        } else {
+          setTimeout(() => { deadData.value = [{ name: '古い薬Aゼリー', stock: 15, shelf: '汎用左-1' }]; deadLoading.value = false; }, 800);
+        }
+      };
+      const switchToDeadTab = () => { activeTab.value = 'dead'; loadDeadData(); };
+
+      
+      const liveData = ref([]);
+      const liveLoading = ref(false);
+      const liveError = ref('');
+      const liveFilterStr = ref('');
+      const livePage = ref(1);
+      const liveTotalCount = ref(0);
+      const liveTotalPages = ref(1);
+      let liveLoaded = false;
+
+      const filteredLiveData = computed(() => {
+        if (!liveFilterStr.value.trim()) return liveData.value;
+        const q = liveFilterStr.value.toLowerCase();
+        return liveData.value.filter(i => (i.name || '').toLowerCase().includes(q) || (i.yj_code || '').toLowerCase().includes(q));
+      });
+
+      
+      const liveCachedAt     = ref('');
+      const liveIsRefreshing = ref(false);
+
+      const liveFromCache = ref(false); 
+
+      
+      const liveCachedAtStr = computed(() => {
+        if (!liveCachedAt.value) return '';
+        try {
+          const d = new Date(liveCachedAt.value);
+          return `${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`;
+        } catch(e) { return ''; }
+      });
+
+      const applyLiveResult = (result, p) => {
+        liveData.value       = result.items || [];
+        liveTotalCount.value = result.totalCount || 0;
+        liveTotalPages.value = result.totalPages || 1;
+        livePage.value       = result.currentPage || p;
+        liveFromCache.value  = !!(result.fromCache || result._cached);
+        liveCachedAt.value   = result.cachedAt || new Date().toISOString();
+      };
+
+      
+      const forceReloadLive = () => loadLiveData(livePage.value, true);
+
+      const loadLiveData = (page, forceRefresh) => {
+        const p = page || livePage.value;
+        
+        if (forceRefresh && liveData.value.length > 0) {
+          liveIsRefreshing.value = true;
+        } else {
+          liveLoading.value = true;
+        }
+        liveError.value = '';
+
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run
+            .withSuccessHandler((result) => {
+              if (result && result.error) { liveError.value = result.error; }
+              else { applyLiveResult(result, p); }
+              liveLoading.value = false; liveIsRefreshing.value = false;
+            })
+            .withFailureHandler((err) => {
+              liveError.value = 'エラー: ' + err.message;
+              liveLoading.value = false; liveIsRefreshing.value = false;
+            })
+            .getLiveStocks(p, !!forceRefresh);
+        } else {
+          setTimeout(() => {
+            applyLiveResult({
+              items: [
+                { id: 1, name: 'アムロジピン錠5mg',  quantity: 580,  lot: '6318124A', expiry: '2028-12-31', last_action: 'dispense', last_acted_at: '2026-03-11T18:13:26.000+09:00', nextDelivery: null },
+                { id: 2, name: 'マイナステスト薬A',  quantity: -146, lot: 'B240101',  expiry: '2027-03-31', last_action: 'dispense', last_acted_at: '2026-03-11T10:00:00.000+09:00', nextDelivery: null },
+                { id: 3, name: 'マイナステスト薬B',  quantity: -10,  lot: 'C240201',  expiry: '2027-06-30', last_action: 'dispense', last_acted_at: '2026-03-10T15:30:00.000+09:00', nextDelivery: 200 },
+              ],
+              totalCount: 3, totalPages: 1, currentPage: 1,
+              _cached: !forceRefresh, cachedAt: new Date().toISOString(),
+            }, p);
+            liveLoading.value = false; liveIsRefreshing.value = false;
+          }, forceRefresh ? 1200 : 400);
+        }
+      };
+
+      const switchToLiveTab   = () => { activeTab.value = 'live';  if (!liveLoaded) { liveLoaded = true; loadLiveData(1, false); } };
+      const liveNextPage      = () => { if (livePage.value < liveTotalPages.value) loadLiveData(livePage.value + 1, false); };
+      const livePrevPage      = () => { if (livePage.value > 1) loadLiveData(livePage.value - 1, false); };
+      const liveForceRefresh  = () => loadLiveData(livePage.value, true);
+
+      
+      const minusSort = ref('quantity'); 
+      const minusSortOptions = [
+        { value: 'quantity', label: '数量順', icon: 'fa-solid fa-arrow-up-1-9' },
+        { value: 'name',     label: '薬品名順', icon: 'fa-solid fa-arrow-down-a-z' },
+        { value: 'date',     label: '操作日時順', icon: 'fa-solid fa-clock' },
+      ];
+
+      
+      const minusStockItems = computed(() =>
+        liveData.value.filter(i => parseFloat(i.quantity) < 0)
+      );
+
+      
+      const minusTotalQuantity = computed(() =>
+        minusStockItems.value.reduce((sum, i) => sum + parseFloat(i.quantity), 0)
+      );
+
+      
+      const sortedMinusStockItems = computed(() => {
+        return [...minusStockItems.value].sort((a, b) => {
+          if (minusSort.value === 'name') return (a.name || '').localeCompare(b.name || '', 'ja');
+          if (minusSort.value === 'date') return (b.last_acted_at || '').localeCompare(a.last_acted_at || '');
+          return parseFloat(a.quantity) - parseFloat(b.quantity); 
+        });
+      });
+
+      
+      const formatActedAt = (dateStr) => {
+        if (!dateStr) return '';
+        try {
+          const d = new Date(dateStr);
+          return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+        } catch(e) { return dateStr; }
+      };
+
+      const switchToMinusTab = () => {
+        activeTab.value = 'minus';
+        // RTデータが未取得なら自動で取得する
+        if (!liveLoaded) { liveLoaded = true; loadLiveData(1); }
+      };
+
+      
+      const isExpiringSoon = (expiryStr) => {
+        if (!expiryStr) return false;
+        try {
+          const exp = new Date(expiryStr.replace(/\\\\//g, '-'));
+          if (isNaN(exp.getTime())) return false;
+          const diffDays = (exp - Date.now()) / (1000 * 60 * 60 * 24);
+          return diffDays <= 90;
+        } catch(e) { return false; }
+      };
+
+      return {
+        activeTab, lastUpdated, lowStockThreshold, isLowStock, isExpiringSoon,
+        searchQuery, lastSearchedQuery, results, primaryResults, alternativeResults, isLoading, hasSearched, errorMsg, lowStockCount,
+        topSearches, recentSearches, applyHistoryQuery, clearHistory,
+        performSearch, clearSearch,
+        shelfData, shelfLoading, shelfError, shelfFilter, openedShelves, openedGroups,
+        filteredShelfData, hierarchyData, shelfSort, sortOptions,
+        shelfLowStockCount, toggleShelf, toggleGroup, switchToShelfTab,
+        alertData, alertSort, alertSortOptions, alertShelfFilter, switchToAlertTab,
+        returnData, returnLoading, returnError, returnFilterStr, filteredReturnData, switchToReturnTab,
+        deadData, deadLoading, deadError, deadFilterStr, filteredDeadData, switchToDeadTab,
+        liveData, liveLoading, liveError, liveFilterStr, filteredLiveData, livePage, liveTotalCount, liveTotalPages,
+        liveCachedAt, liveCachedAtStr, liveFromCache, liveIsRefreshing, forceReloadLive,
+        switchToLiveTab, loadLiveData, liveNextPage, livePrevPage,
+        minusStockItems, minusTotalQuantity, sortedMinusStockItems, minusSort, minusSortOptions,
+        switchToMinusTab, formatActedAt,
+      };
+    }
+  }).mount('#app');
+<\\/script>
+<\\/body>
+<\\/html>

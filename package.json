@@ -1,0 +1,17 @@
+{
+  "name": "inventory_app_gas",
+  "version": "1.0.0",
+  "description": "Google Apps Script project for inventory_app",
+  "scripts": {
+    "login": "clasp login",
+    "logout": "clasp logout",
+    "push": "clasp push",
+    "pull": "clasp pull",
+    "open": "clasp open",
+    "clone": "clasp clone"
+  },
+  "devDependencies": {
+    "@google/clasp": "^2.4.2",
+    "@types/google-apps-script": "^1.0.83"
+  }
+}

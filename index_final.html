@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>薬の在庫・棚番検索アプリ</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #f3f4f6;
+    }
+
+    .glass-card {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .spinner {
+      animation: spin 1s linear infinite;
+    }
+
+    .fade-in {
+      animation: fadeIn 0.4s ease-in-out;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .low-stock-border {
+      border-left-color: #f59e0b !important;
+    }
+
+    .low-stock-pulse {
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        opacity: 1;
+      }
+      50% {
+        opacity: .65;
+      }
+    }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 4px;
+      background: #e0e7ff;
+      outline: none;
+    }
+
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #6366f1;
+      cursor: pointer;
+    }
+
+    .shelf-card {
+      transition: box-shadow 0.2s;
+    }
+
+    .shelf-card:hover {
+      box-shadow: 0 8px 20px -4px rgba(0, 0, 0, 0.12);
+    }
+  </style>
+</head>
+
+<body class="antialiased text-gray-800">
+
+  <div id="app" class="min-h-screen flex flex-col items-center p-4 sm:p-6 md:p-8">
+
+    <header class="w-full max-w-3xl mb-4 mt-4 text-center">
+      <h1 class="text-3xl sm:text-4xl font-bold text-indigo-700 tracking-tight flex items-center justify-center gap-3">
+        <i class="fa-solid fa-pills mb-1"></i> 在庫・棚番 検索
+      </h1>
+      <div class="flex items-center justify-center gap-3 mt-2">
+        <p class="text-gray-400 text-xs flex items-center gap-1">
+          <i class="fa-regular fa-clock"></i>
+          <span v-if="lastUpdated">最終更新: {{ lastUpdated }}</span>
+          <span v-else>更新日時を読み込み中...</span>
+        </p>
+        <a href="https://app.medorder.jp/pharmacies/20/stocks" target="_blank" rel="noopener"
+          class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 hover:shadow transition-all duration-200">
+          <i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+          MedOrderで在庫確認
+        </a>
+      </div>
+    </header>
+
+    <nav class="w-full max-w-3xl mb-4">
+      <div class="glass-card rounded-xl p-1 flex gap-1">
+        <button @click="activeTab = 'search'"
+          class="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1"
+          :class="activeTab === 'search' ? 'bg-indigo-600 text-white shadow' : 'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-magnifying-glass text-sm"></i>
+          検索
+        </button>
+        <button @click="switchToShelfTab"
+          class="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1"
+          :class="activeTab === 'shelf' ? 'bg-indigo-600 text-white shadow' : 'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-layer-group text-sm"></i>
+          棚番
+        </button>
+        <button @click="switchToAlertTab"
+          class="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1 relative"
+          :class="activeTab === 'alert' ? 'bg-red-500 text-white shadow' : 'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-triangle-exclamation text-sm"></i>
+          発注
+          <span v-if="alertData.total > 0 && activeTab !== 'alert'"
+            class="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center px-1">
+            {{ alertData.total > 99 ? '99+' : alertData.total }}
+          </span>
+        </button>
+        <button @click="switchToReturnTab"
+          class="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1"
+          :class="activeTab === 'return' ? 'bg-blue-600 text-white shadow' : 'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-rotate-left text-sm"></i>
+          返品
+        </button>
+        <button @click="switchToDeadTab"
+          class="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1"
+          :class="activeTab === 'dead' ? 'bg-purple-600 text-white shadow' : 'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-ghost text-sm"></i>
+          不動
+        </button>
+        <button @click="switchToLiveTab"
+          class="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1"
+          :class="activeTab === 'live' ? 'bg-green-600 text-white shadow' : 'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-satellite-dish text-sm"></i>
+          RT
+        </button>
+      </div>
+    </nav>
+<!-- PLACEHOLDER_MAIN -->
+</div>
+</body>
+</html>

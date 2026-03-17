@@ -1,0 +1,29 @@
+[
+  {
+    "id": 8862201219685448016,
+    "pharmacy_id": "20",
+    "stockable_item_id": 28632,
+    "quantity": "5188.0",
+    "scheduled_stocks": "{\"predelivery\":0,\"preprescription\":0,\"presubdivision_buy\":0,\"presubdivision_sell\":0,\"predispense\":0}",
+    "order_items": [
+      {
+        "orderable_item_id": "75413",
+        "lot": "B0618",
+        "expires_on": "2028-07-31",
+        "quantity": 5188
+      }
+    ],
+    "order_delivery_details": "{\"ordered\":null,\"delivered\":null,\"undelivered\":null,\"details\":[{\"date\":\"2026-03-11\",\"ordered_quantity\":0,\"delivered_quantity\":0,\"order_aggregated\":true,\"delivery_aggregated\":true,\"ordered_at\":null,\"slip_created_at\":null,\"delivery_created_at\":null,\"slipped_on\":null,\"delivers_on\":null},{\"date\":\"2026-03-10\",\"ordered_quantity\":0,\"delivered_quantity\":0,\"order_aggregated\":true,\"delivery_aggregated\":true,\"ordered_at\":null,\"slip_created_at\":null,\"delivery_created_at\":null,\"slipped_on\":null,\"delivers_on\":null},{\"date\":\"2026-03-09\",\"ordered_quantity\":0,\"delivered_quantity\":0,\"order_aggregated\":true,\"delivery_aggregated\":true,\"ordered_at\":null,\"slip_created_at\":null,\"delivery_created_at\":null,\"slipped_on\":null,\"delivers_on\":null},{\"date\":\"2026-03-08\",\"ordered_quantity\":0,\"delivered_quantity\":0,\"order_aggregated\":true,\"delivery_aggregated\":true,\"ordered_at\":null,\"slip_created_at\":null,\"delivery_created_at\":null,\"slipped_on\":null,\"delivers_on\":null},{\"date\":\"2026-03-07\",\"ordered_quantity\":0,\"delivered_quantity\":0,\"order_aggregated\":true,\"delivery_aggregated\":true,\"ordered_at\":null,\"slip_created_at\":null,\"delivery_created_at\":null,\"slipped_on\":null,\"delivers_on\":null},{\"date\":\"2026-03-06\",\"ordered_quantity\":0,\"delivered_quantity\":5000,\"order_aggregated\":true,\"delivery_aggregated\":true,\"ordered_at\":null,\"slip_created_at\":\"2026-03-06T13:02:52\",\"delivery_created_at\":\"2026-03-06T14:00:55.338495\",\"slipped_on\":\"2026-03-06\",\"delivers_on\":null},{\"date\":\"2026-03-05\",\"ordered_quantity\":0,\"delivered_quantity\":5000,\"order_aggregated\":true,\"delivery_aggregated\":true,\"ordered_at\":null,\"slip_created_at\":\"2026-03-05T05:02:39\",\"delivery_created_at\":\"2026-03-05T08:00:36.665157\",\"slipped_on\":\"2026-03-05\",\"delivers_on\":null},{\"date\":\"2026-03-04\",\"ordered_quantity\":0,\"delivered_quantity\":0,\"order_aggregated\":true,\"delivery_aggregated\":true,\"ordered_at\":null,\"slip_created_at\":null,\"delivery_created_at\":null,\"slipped_on\":null,\"delivers_on\":null},{\"date\":\"2026-03-03\",\"ordered_quantity\":0,\"delivered_quantity\":1000,\"order_aggregated\":false,\"delivery_aggregated\":false,\"ordered_at\":null,\"slip_created_at\":\"2026-03-03T05:02:37\",\"delivery_created_at\":\"2026-03-03T08:00:35.911988\",\"slipped_on\":\"2026-03-03\",\"delivers_on\":null},{\"date\":\"2026-03-03\",\"ordered_quantity\":0,\"delivered_quantity\":5500,\"order_aggregated\":false,\"delivery_aggregated\":false,\"ordered_at\":null,\"slip_created_at\":\"2026-03-03T05:02:37\",\"delivery_created_at\":\"2026-03-03T08:00:35.927796\",\"slipped_on\":\"2026-03-03\",\"delivers_on\":null},{\"date\":\"2026-03-03\",\"ordered_quantity\":0,\"delivered_quantity\":1000,\"order_aggregated\":false,\"delivery_aggregated\":false,\"ordered_at\":null,\"slip_created_at\":\"2026-03-03T05:02:37\",\"delivery_created_at\":\"2026-03-03T08:00:35.937900\",\"slipped_on\":\"2026-03-03\",\"delivers_on\":null},{\"date\":\"2026-03-02\",\"ordered_quantity\":1000,\"delivered_quantity\":0,\"order_aggregated\":false,\"delivery_aggregated\":false,\"ordered_at\":\"2026-03-02T19:00:31\",\"slip_created_at\":null,\"delivery_created_at\":null,\"slipped_on\":null,\"delivers_on\":null},{\"date\":\"2026-03-02\",\"ordered_quantity\":1000,\"delivered_quantity\":0,\"order_aggregated\":false,\"delivery_aggregated\":false,\"ordered_at\":\"2026-03-02T13:25:06\",\"slip_created_at\":null,\"delivery_created_at\":null,\"slipped_on\":null,\"delivers_on\":null},{\"date\":\"2026-03-01\",\"ordered_quantity\":0,\"delivered_quantity\":0,\"order_aggregated\":false,\"delivery_aggregated\":false,\"ordered_at\":null,\"slip_created_at\":null,\"delivery_created_at\":null,\"slipped_on\":null,\"delivers_on\":null}]}",
+    "last_action": "dispense",
+    "last_action_value": 2,
+    "last_delta_quantity": "-60.0",
+    "last_acted_at": "2026-03-11T14:39:28.000+09:00",
+    "updated_at": "2026-03-11T14:39:34.260+09:00",
+    "dm_type": "upsert",
+    "dm_transform_started_at": "2026-03-11T14:47:32.456+09:00",
+    "dm_updated_at": "2026-03-11T14:50:10.141+09:00",
+    "from_logged_at": null,
+    "to_logged_at": null,
+    "stockable_item_ids": "[]"
+  }
+]

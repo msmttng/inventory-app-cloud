@@ -1,0 +1,1 @@
+import fs from 'fs'; let content = fs.readFileSync('index.html', 'utf8'); const regex = /const customOrder = \[[^\]]+\];/g; const replacement = \const customOrder = ['汎用左', '汎用右', '引出し', '軟膏', 'センター下左', 'センター下右'];\; content = content.replace(regex, replacement); fs.writeFileSync('index.html', content, 'utf8'); console.log('Update complete');
