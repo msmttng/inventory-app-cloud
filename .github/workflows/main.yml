@@ -34,5 +34,7 @@ jobs:
         MEDORDER_PASSWORD: ${{ secrets.MEDORDER_PASSWORD }}
         ORDER_EPI_ID: ${{ secrets.ORDER_EPI_ID }}
         ORDER_EPI_PASSWORD: ${{ secrets.ORDER_EPI_PASSWORD }}
+        COLLABO_ID: ${{ secrets.COLLABO_ID }}
+        COLLABO_PASSWORD: ${{ secrets.COLLABO_PASSWORD }}
       run: |
         python extract_data.py
