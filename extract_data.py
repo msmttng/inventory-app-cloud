@@ -395,7 +395,7 @@ async def extract_orderepi(browser):
     
     if not epi_email or not epi_password:
         print(f"[{datetime.now()}] [WARNING] ORDER_EPI_ID または ORDER_EPI_PASSWORD が設定されていないため、Phase 3はスキップします。")
-        return "OrderEPI Skipped"
+        return {"status": "OrderEPI Skipped", "delivery_map": {}}
 
     browser_context = None
     try:
@@ -554,7 +554,7 @@ async def extract_orderepi(browser):
             print(f"[{datetime.now()}] [WARNING] Order-EPI 発注履歴テーブルが見つかりませんでした（配送予定データは送信済み）")
         
         await page.close()
-        return f"OrderEPI Success (delivery={len(delivery_status_map)}, history={added_rows} rows)"
+        return {"status": f"OrderEPI Success (delivery={len(delivery_status_map)}, history={added_rows} rows)", "delivery_map": delivery_status_map}
         
     except Exception as e:
         err_msg = f"Order-EPI Error: {e}"
@@ -571,7 +571,7 @@ async def extract_collabo(browser):
     
     if not collabo_id or not collabo_password:
         print(f"[{datetime.now()}] [WARNING] COLLABO_ID または COLLABO_PASSWORD が設定されていないため、Phase 4はスキップします。")
-        return "Collabo Skipped"
+        return {"status": "Collabo Skipped", "delivery_items": []}
 
     browser_context = None
     try:
@@ -607,6 +607,7 @@ async def extract_collabo(browser):
         
         csv_data_body = ""
         added_rows = 0
+        collabo_delivery_items = []
         
         if count > 0:
             for i in range(count):
@@ -635,16 +636,17 @@ async def extract_collabo(browser):
                      name_clean = name_col.replace('\n', ' ').strip()
                      if name_clean:
                          csv_data_body += f"'{datetime.now().strftime('%Y/%m/%d')},完了,{maker_col},{name_clean},,箱,{qty_col},Collabo,{delivery_date}\n"
+                         collabo_delivery_items.append({"name": name_clean, "date": delivery_date, "source": "スズケン"})
                          added_rows += 1
                          
         if added_rows > 0:
             csv_data = "発注日,状態,メーカー,品名,規格,単位,数量,発注先,納品予定\n" + csv_data_body
             requests.post(GAS_WEB_APP_URL, params={'type': 'collabo_history'}, data=csv_data.encode('utf-8'))
             print(f"[{datetime.now()}] Collabo Portal History: Success ({added_rows} rows)")
-            return f"Collabo Success ({added_rows} rows)"
+            return {"status": f"Collabo Success ({added_rows} rows)", "delivery_items": collabo_delivery_items}
         else:
             print(f"[{datetime.now()}] [WARNING] Collabo Portal 履歴テーブルデータが空か見つかりませんでした。")
-            return "Collabo Success (0 rows)"
+            return {"status": "Collabo Success (0 rows)", "delivery_items": collabo_delivery_items}
             
     except Exception as e:
         err_msg = f"Collabo Portal Error: {e}"
@@ -700,9 +702,39 @@ async def run_extraction():
             if isinstance(res, Exception):
                 failures.append(str(res))
         
+        # ── 納品履歴の統合送信 ──
+        # Phase 3 (OrderEPI/Medipal) と Phase 4 (Collabo) の納品予定データを統合
+        try:
+            receive_csv_lines = ["納品日,商品名,取引先"]
+            
+            # Medipal 配送予定データ (results[2] = extract_orderepi)
+            epi_result = results[2]
+            if isinstance(epi_result, dict) and epi_result.get("delivery_map"):
+                for name, date in epi_result["delivery_map"].items():
+                    name_clean = name.replace(',', '').strip()
+                    date_clean = date.replace(',', '').strip()
+                    receive_csv_lines.append(f"{date_clean},{name_clean},メディセオ")
+            
+            # Collabo 納品予定データ (results[3] = extract_collabo)
+            collabo_result = results[3]
+            if isinstance(collabo_result, dict) and collabo_result.get("delivery_items"):
+                for item in collabo_result["delivery_items"]:
+                    name_clean = item["name"].replace(',', '').strip()
+                    date_clean = item["date"].replace(',', '').strip()
+                    source = item.get("source", "スズケン")
+                    receive_csv_lines.append(f"{date_clean},{name_clean},{source}")
+            
+            if len(receive_csv_lines) > 1:
+                receive_csv = "\n".join(receive_csv_lines)
+                resp = requests.post(GAS_WEB_APP_URL, params={'type': 'receive_history'}, data=receive_csv.encode('utf-8'))
+                print(f"[{datetime.now()}] 納品履歴統合送信: {len(receive_csv_lines) - 1} 件 (status={resp.status_code})")
+            else:
+                print(f"[{datetime.now()}] [WARNING] 納品履歴データが0件のため送信スキップ")
+        except Exception as e_recv:
+            print(f"[{datetime.now()}] [WARNING] 納品履歴統合送信エラー: {e_recv}")
+        
         if len(failures) > 0:
             error_details = ' | '.join(failures)
-            # Some failed
             raise RuntimeError(f"一部のフェーズが失敗しました: {error_details}")
 
         return "データ抽出とトークン更新が正常に完了しました。"
