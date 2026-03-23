@@ -165,7 +165,9 @@ async def extract_looker_studio(browser, state_path):
                 requests.post(GAS_WEB_APP_URL, params={'type': 'inventory'}, data=f.read().encode('utf-8'))
             print(f"[{datetime.now()}] Looker Studio Inventory: Success")
         except Exception as e_inv:
-            print(f"[{datetime.now()}] [WARNING] 在庫日次エクスポートをスキップ: {e_inv}")
+            err = f"在庫日次エクスポートをスキップ: {e_inv}"
+            print(f"[{datetime.now()}] [WARNING] {err}")
+            send_log(f"Phase1 ERROR: {err}")
             # Escapeでダイアログを閉じて次へ
             try:
                 await page.keyboard.press("Escape")
@@ -260,6 +262,57 @@ async def extract_looker_studio(browser, state_path):
             await export_table_to_csv('返品推奨品', 'return')
         except Exception as e_ret:
             print(f"[{datetime.now()}] [WARNING] 返品推奨品エクスポートをスキップ: {e_ret}")
+
+        # ── 納品実績タブ（入庫 - 日次）──
+        try:
+            await page.keyboard.press("Escape")  # 念のためダイアログを閉じる
+        except Exception:
+            pass
+        try:
+            # 「入庫 - 日次」タブをクリック
+            await page.locator("text='入庫 - 日次'").first.click(timeout=30000)
+            await asyncio.sleep(15)  # チャート描画完了を待つ
+            
+            # テーブルタイトルを探す（品目別の入庫 or 類似のタイトル）
+            receive_title = None
+            for candidate in ['品目別の入庫数', '品目別の入庫', '入庫品目', '入庫一覧']:
+                try:
+                    loc = page.locator(f"text='{candidate}'").first
+                    await loc.wait_for(state="visible", timeout=10000)
+                    receive_title = candidate
+                    break
+                except Exception:
+                    continue
+            
+            if receive_title:
+                await asyncio.sleep(5)  # データ描画完了を待つ
+                await export_table_to_csv(receive_title, 'receive_history')
+                print(f"[{datetime.now()}] Looker Studio 納品実績: Success (title='{receive_title}')")
+            else:
+                # タイトルが見つからない場合、ページ上の最初のテーブルを右クリックして試行
+                print(f"[{datetime.now()}] [WARNING] 納品実績テーブルのタイトルが見つかりません。テーブル直接エクスポートを試みます。")
+                await asyncio.sleep(5)
+                # ページ中央付近のテーブル領域を右クリック
+                box = await page.locator("td, [role='cell'], .cell").first.bounding_box()
+                if box:
+                    await page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2, button="right")
+                    await asyncio.sleep(1)
+                    await page.locator("text=/グラフをエクスポート/").first.click(timeout=15000, force=True)
+                    await page.locator("text=/データのエクスポート/").first.click(timeout=15000, force=True)
+                    await click_csv_option(page)
+                    date_str_r = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    async with page.expect_download() as dl_info_r:
+                        await page.locator("role=button[name='エクスポート']").click(force=True)
+                    dl_r = await dl_info_r.value
+                    f_path_r = os.path.join(DOWNLOAD_DIR, f"receive_export_{date_str_r}.csv")
+                    await dl_r.save_as(f_path_r)
+                    with open(f_path_r, 'r', encoding='utf-8') as f:
+                        requests.post(GAS_WEB_APP_URL, params={'type': 'receive_history'}, data=f.read().encode('utf-8'))
+                    print(f"[{datetime.now()}] Looker Studio 納品実績(フォールバック): Success")
+                else:
+                    print(f"[{datetime.now()}] [WARNING] 納品実績テーブル要素が見つかりません")
+        except Exception as e_recv:
+            print(f"[{datetime.now()}] [WARNING] 納品実績エクスポートをスキップ: {e_recv}")
 
         await page.close()
         return "Looker Studio Success"
