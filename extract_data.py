@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 import requests  # type: ignore
 import json
 import base64
@@ -165,15 +166,16 @@ async def extract_looker_studio(browser, state_path):
                 requests.post(GAS_WEB_APP_URL, params={'type': 'inventory'}, data=f.read().encode('utf-8'))
             print(f"[{datetime.now()}] Looker Studio Inventory: Success")
         except Exception as e_inv:
-            err = f"在庫日次エクスポートをスキップ: {e_inv}"
-            print(f"[{datetime.now()}] [WARNING] {err}")
-            send_log(f"Phase1 ERROR: {err}")
-            # Escapeでダイアログを閉じて次へ
+            err = f"在庫日次エクスポート失敗: {e_inv}"
+            print(f"[{datetime.now()}] [ERROR] {err}")
+            send_log(f"Phase1 CRITICAL: {err}")
             try:
                 await page.keyboard.press("Escape")
                 await asyncio.sleep(1)
             except Exception:
                 pass
+            # 在庫データは最重要 — 失敗を伝播してGitHub Actionsを失敗させる
+            raise RuntimeError(err) from e_inv
 
         async def export_table_to_csv(title_text, export_type):
             """セクションタイトル直下にある最初のtdセルを右クリックしてCSVエクスポート"""
@@ -813,6 +815,7 @@ async def main():
                 print(f"[{datetime.now()}] [ERROR] {fatal_msg}")
                 report_status("Fatal Error")
                 send_log(fatal_msg)
+                sys.exit(1)  # GitHub Actionsを失敗させてメール通知をトリガー
 
 if __name__ == "__main__":
     asyncio.run(main())

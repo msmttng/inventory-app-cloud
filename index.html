@@ -97,16 +97,31 @@
           <span v-if="lastUpdated">最終更新: {{ lastUpdated }}</span>
           <span v-else>更新日時を読み込み中...</span>
         </p>
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 flex-wrap justify-center">
           <button @click="triggerScrape" :disabled="isScraping"
             class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-all duration-200 shadow-sm"
             :class="isScraping ? 'bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed' : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 hover:shadow'">
             <i class="fa-solid fa-cloud-arrow-down" :class="isScraping ? 'fa-beat' : ''"></i>在庫情報を取得
           </button>
+          <button @click="reloadAllData" :disabled="isReloadingAll"
+            class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-all duration-200 shadow-sm"
+            :class="isReloadingAll ? 'bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed' : 'bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100 hover:shadow'">
+            <i class="fa-solid fa-arrows-rotate" :class="isReloadingAll ? 'spinner' : ''"></i>一括更新
+          </button>
           <a href="https://app.medorder.jp/pharmacies/20/stocks" target="_blank" rel="noopener"
             class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 hover:shadow transition-all duration-200">
             <i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>MedOrder
           </a>
+        </div>
+      </div>
+    </div>
+    <!-- データ鮮度警告バナー -->
+    <div v-if="isDataStale" class="mt-3 w-full max-w-3xl mx-auto">
+      <div class="bg-red-50 border border-red-300 rounded-xl px-4 py-3 flex items-center gap-3 shadow-sm" style="animation: pulse 2s ease-in-out infinite;">
+        <i class="fa-solid fa-triangle-exclamation text-red-500 text-lg"></i>
+        <div class="flex-1">
+          <p class="text-red-700 text-sm font-bold">⚠️ 在庫データが古い可能性があります</p>
+          <p class="text-red-500 text-xs mt-0.5">在庫データ最終更新: {{ tabUpdatedTimes.inventory || '不明' }}（{{ staleHoursText }}）</p>
         </div>
       </div>
     </div>
@@ -387,6 +402,10 @@
       <div v-else-if="shelfError" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg flex items-start"><i class="fa-solid fa-triangle-exclamation text-red-500 mt-1 mr-3"></i><p class="text-red-700">{{ shelfError }}</p></div>
       <div v-else-if="groupedShelfData.length>0">
         <div class="glass-card rounded-xl p-4 mb-4 flex flex-col gap-3">
+          <div v-if="tabUpdatedTimes.inventory" class="flex items-center gap-1.5 text-[11px] text-gray-400">
+            <i class="fa-regular fa-clock"></i>
+            <span>在庫データ更新: {{ tabUpdatedTimes.inventory }}</span>
+          </div>
           <div class="relative w-full"><i class="fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i><input v-model="shelfFilter" type="text" placeholder="棚番または薬品名で絞り込み..." class="w-full pl-9 pr-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-indigo-400 bg-white" /></div>
           <div class="border-t border-gray-100 pt-3">
             <div class="flex items-center justify-between mb-2"><label class="text-xs font-semibold text-gray-500 flex items-center gap-2"><i class="fa-solid fa-triangle-exclamation text-amber-400"></i>在庫わずか警告ライン</label><span class="text-sm font-bold text-amber-500 bg-amber-50 border border-amber-200 rounded-full px-3 py-0.5">{{ lowStockThreshold }} 個以下</span></div>
@@ -435,6 +454,10 @@
     <div v-if="activeTab==='alert'">
       <div v-if="shelfLoading" class="glass-card rounded-2xl p-12 text-center"><i class="fa-solid fa-circle-notch spinner text-4xl text-red-400 block mb-4"></i><p class="text-gray-400">データを読み込み中...</p></div>
       <div v-else>
+        <div v-if="tabUpdatedTimes.inventory" class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-2 px-1">
+          <i class="fa-regular fa-clock"></i>
+          <span>在庫データ更新: {{ tabUpdatedTimes.inventory }}</span>
+        </div>
         <div class="glass-card rounded-xl p-4 mb-4"><div class="flex items-center justify-between mb-2"><label class="text-xs font-semibold text-gray-500 flex items-center gap-2"><i class="fa-solid fa-triangle-exclamation text-amber-400"></i>在庫わずかの基準</label><span class="text-sm font-bold text-amber-500 bg-amber-50 border border-amber-200 rounded-full px-3 py-0.5">{{ lowStockThreshold }} 個以下</span></div><input type="range" v-model.number="lowStockThreshold" min="0" max="100" step="1" /><div class="flex justify-between text-xs text-gray-300 mt-1"><span>0</span><span>50</span><span>100</span></div></div>
         <div class="glass-card rounded-xl p-3 mb-3 flex flex-wrap gap-2 items-center"><span class="text-xs font-semibold text-gray-400 w-full mb-1">用法区分：</span><button @click="alertUsageFilter=''" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="alertUsageFilter===''?'bg-gray-700 text-white border-gray-700 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-gray-400'">すべて</button><button @click="alertUsageFilter='内'" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="alertUsageFilter==='内'?'bg-blue-600 text-white border-blue-600 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-blue-400 hover:text-blue-600'"><i class="fa-solid fa-tablets mr-1"></i>内服薬</button><button @click="alertUsageFilter='外'" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="alertUsageFilter==='外'?'bg-green-600 text-white border-green-600 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-green-400 hover:text-green-600'"><i class="fa-solid fa-hand-dots mr-1"></i>外用剤</button><button @click="alertUsageFilter='その他'" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="alertUsageFilter==='その他'?'bg-purple-600 text-white border-purple-600 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-purple-400 hover:text-purple-600'"><i class="fa-solid fa-ellipsis mr-1"></i>その他</button></div>
         <div class="glass-card rounded-xl p-3 mb-4 flex flex-wrap gap-2 items-center"><span class="text-xs font-semibold text-gray-400 w-full mb-1">単位：</span><button @click="alertUnitFilter=''" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="alertUnitFilter===''?'bg-gray-700 text-white border-gray-700 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-gray-400'">すべて</button><template v-for="u in unitFilterOptions" :key="u.value"><button @click="alertUnitFilter=u.value" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="alertUnitFilter===u.value?'bg-orange-500 text-white border-orange-500 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-orange-400 hover:text-orange-600'">{{ u.label }}</button><button v-if="u.value==='液剤'" @click="alertUnitFilter='点眼'" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="alertUnitFilter==='点眼'?'bg-cyan-600 text-white border-cyan-600 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-cyan-400 hover:text-cyan-600'">👁 点眼</button></template></div>
@@ -451,7 +474,11 @@
       <div v-if="returnLoading" class="glass-card rounded-2xl p-12 text-center"><i class="fa-solid fa-circle-notch spinner text-4xl text-blue-400 block mb-4"></i><p class="text-gray-400">返品推奨データを読み込み中...</p></div>
       <div v-else-if="returnError" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg flex items-start"><i class="fa-solid fa-triangle-exclamation text-red-500 mt-1 mr-3"></i><p class="text-red-700">{{ returnError }}</p></div>
       <div v-else-if="returnData.length>0">
-        <div class="flex justify-between items-center mb-4 px-2"><h2 class="text-lg font-bold text-blue-800 flex items-center gap-2"><i class="fa-solid fa-rotate-left"></i> 返品推奨品リスト</h2><span class="text-xs font-medium bg-blue-100 text-blue-800 py-1 px-3 rounded-full">{{ returnData.length }}件</span></div>
+        <div class="flex justify-between items-center mb-2 px-2"><h2 class="text-lg font-bold text-blue-800 flex items-center gap-2"><i class="fa-solid fa-rotate-left"></i> 返品推奨品リスト</h2><span class="text-xs font-medium bg-blue-100 text-blue-800 py-1 px-3 rounded-full">{{ returnData.length }}件</span></div>
+        <div v-if="tabUpdatedTimes.return" class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-4 px-2">
+          <i class="fa-regular fa-clock"></i>
+          <span>データ更新: {{ tabUpdatedTimes.return }}</span>
+        </div>
         <div class="flex flex-wrap items-center gap-2 mb-4"><span class="text-xs font-semibold text-gray-400 mr-1">並び替え：</span><button v-for="opt in genericSortOptions" :key="opt.value" @click="returnSort=opt.value" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="returnSort===opt.value?'bg-blue-600 text-white border-blue-600 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-blue-400 hover:text-blue-600'"><i :class="opt.icon" class="mr-1"></i>{{ opt.label }}</button></div>
         <div class="relative mb-4"><i class="fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i><input v-model="returnFilterStr" type="text" placeholder="棚番・薬品名で絞り込み..." class="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-blue-400 bg-white" /><button v-if="returnFilterStr" @click="returnFilterStr=''" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors"><i class="fa-solid fa-xmark text-sm"></i></button></div>
         <div class="glass-card rounded-xl overflow-hidden shadow-sm"><div v-for="(item,i) in filteredReturnData" :key="i" class="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-blue-50 transition-colors fade-in" :style="'animation-delay:'+(i*0.02)+'s'"><div class="flex-1 min-w-0 mr-3"><div class="font-bold text-gray-800 text-base truncate">{{ item.name }}</div><div class="flex items-center gap-2 mt-1"><div class="text-xs text-gray-500 flex items-center gap-1 font-medium bg-gray-100 w-fit px-2 py-0.5 rounded"><i class="fa-solid fa-layer-group text-xs text-blue-500"></i> {{ item.shelf!==""?item.shelf:"-" }}</div><div v-if="item.priceStr" class="text-[10px] text-gray-400 font-medium">薬価: {{ item.priceStr }}</div></div></div><div class="shrink-0 flex items-center gap-3"><div v-if="item.stockValueStr" class="text-right"><div class="text-[10px] text-gray-400 font-bold uppercase">在庫金額</div><div class="text-sm font-bold text-gray-600">{{ item.stockValueStr }}</div></div><div class="shrink-0 text-center bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100 min-w-[60px]"><div class="text-[10px] text-gray-400 font-bold mb-0.5 uppercase tracking-wide">在庫</div><div class="text-xl font-black text-gray-700">{{ item.stock!==""?item.stock:"-" }}</div></div></div></div></div>
@@ -463,7 +490,11 @@
       <div v-if="deadLoading" class="glass-card rounded-2xl p-12 text-center"><i class="fa-solid fa-circle-notch spinner text-4xl text-purple-400 block mb-4"></i><p class="text-gray-400">不動在庫データを読み込み中...</p></div>
       <div v-else-if="deadError" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg flex items-start"><i class="fa-solid fa-triangle-exclamation text-red-500 mt-1 mr-3"></i><p class="text-red-700">{{ deadError }}</p></div>
       <div v-else-if="deadData.length>0">
-        <div class="flex justify-between items-center mb-4 px-2"><h2 class="text-lg font-bold text-purple-800 flex items-center gap-2"><i class="fa-solid fa-ghost"></i> 不動在庫の可能性</h2><span class="text-xs font-medium bg-purple-100 text-purple-800 py-1 px-3 rounded-full">{{ deadData.length }}件</span></div>
+        <div class="flex justify-between items-center mb-2 px-2"><h2 class="text-lg font-bold text-purple-800 flex items-center gap-2"><i class="fa-solid fa-ghost"></i> 不動在庫の可能性</h2><span class="text-xs font-medium bg-purple-100 text-purple-800 py-1 px-3 rounded-full">{{ deadData.length }}件</span></div>
+        <div v-if="tabUpdatedTimes.dead" class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-4 px-2">
+          <i class="fa-regular fa-clock"></i>
+          <span>データ更新: {{ tabUpdatedTimes.dead }}</span>
+        </div>
         <div class="flex flex-wrap items-center gap-2 mb-4"><span class="text-xs font-semibold text-gray-400 mr-1">並び替え：</span><button v-for="opt in genericSortOptions" :key="opt.value" @click="deadSort=opt.value" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="deadSort===opt.value?'bg-purple-600 text-white border-purple-600 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-purple-400 hover:text-purple-600'"><i :class="opt.icon" class="mr-1"></i>{{ opt.label }}</button></div>
         <div class="relative mb-4"><i class="fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i><input v-model="deadFilterStr" type="text" placeholder="棚番・薬品名で絞り込み..." class="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-purple-400 bg-white" /><button v-if="deadFilterStr" @click="deadFilterStr=''" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors"><i class="fa-solid fa-xmark text-sm"></i></button></div>
         <div class="glass-card rounded-xl overflow-hidden shadow-sm"><div v-for="(item,i) in filteredDeadData" :key="i" class="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-purple-50 transition-colors fade-in" :style="'animation-delay:'+(i*0.02)+'s'"><div class="flex-1 min-w-0 mr-3"><div class="font-bold text-gray-800 text-base truncate">{{ item.name }}</div><div class="flex items-center gap-2 mt-1"><div class="text-xs text-gray-500 flex items-center gap-1 font-medium bg-gray-100 w-fit px-2 py-0.5 rounded"><i class="fa-solid fa-layer-group text-xs text-purple-500"></i> {{ item.shelf!==""?item.shelf:"-" }}</div><div v-if="item.priceStr" class="text-[10px] text-gray-400 font-medium">薬価: {{ item.priceStr }}</div></div></div><div class="shrink-0 flex items-center gap-3"><div v-if="item.stockValueStr" class="text-right"><div class="text-[10px] text-gray-400 font-bold uppercase">在庫金額</div><div class="text-sm font-bold text-gray-600">{{ item.stockValueStr }}</div></div><div class="shrink-0 text-center bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100 min-w-[60px]"><div class="text-[10px] text-gray-400 font-bold mb-0.5 uppercase tracking-wide">在庫</div><div class="text-xl font-black text-gray-700">{{ item.stock!==""?item.stock:"-" }}</div></div></div></div></div>
@@ -520,9 +551,9 @@
       </div>
       <div v-else>
         <!-- ヘッダー -->
-        <div class="flex justify-between items-center mb-3 px-1">
+        <div class="flex justify-between items-center mb-1 px-1">
           <h2 class="text-lg font-bold text-emerald-700 flex items-center gap-2">
-            <i class="fa-solid fa-box-open"></i> 納品履歴 (半年分)
+            <i class="fa-solid fa-box-open"></i> 納品履歴 (最新500件)
           </h2>
           <div class="flex items-center gap-2">
             <span class="text-xs font-medium bg-emerald-100 text-emerald-800 py-1 px-3 rounded-full">{{ filteredReceiveData.length }}件</span>
@@ -530,6 +561,10 @@
               <i class="fa-solid fa-arrows-rotate"></i> 更新
             </button>
           </div>
+        </div>
+        <div v-if="tabUpdatedTimes.receive_history" class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-3 px-1">
+          <i class="fa-regular fa-clock"></i>
+          <span>データ更新: {{ tabUpdatedTimes.receive_history }}</span>
         </div>
         <!-- 絞り込み -->
         <div class="relative mb-4">
@@ -573,7 +608,7 @@
       </div>
       <div v-else>
         <!-- ヘッダー -->
-        <div class="flex justify-between items-center mb-3 px-1">
+        <div class="flex justify-between items-center mb-1 px-1">
           <h2 class="text-lg font-bold text-cyan-700 flex items-center gap-2">
             <i class="fa-solid fa-clock-rotate-left"></i> 発注履歴
           </h2>
@@ -583,6 +618,10 @@
               <i class="fa-solid fa-arrows-rotate"></i> 更新
             </button>
           </div>
+        </div>
+        <div v-if="tabUpdatedTimes.history" class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-3 px-1">
+          <i class="fa-regular fa-clock"></i>
+          <span>データ更新: {{ tabUpdatedTimes.history }}</span>
         </div>
 
         <!-- ── システムサブタブ（MedOrder / OrderEpi） ── -->
@@ -743,9 +782,13 @@
       <div v-if="minusLoading" class="glass-card rounded-2xl p-12 text-center"><i class="fa-solid fa-circle-notch spinner text-4xl text-rose-400 block mb-4"></i><p class="text-gray-400">MedOrderからマイナス在庫を取得中...</p></div>
       <div v-else-if="minusError" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg"><p class="text-red-700 font-semibold"><i class="fa-solid fa-triangle-exclamation mr-2"></i>{{ minusError }}</p></div>
       <div v-else>
-        <div class="flex items-center justify-between mb-4 px-1">
+        <div class="flex items-center justify-between mb-2 px-1">
           <h2 class="text-sm font-bold text-rose-700 flex items-center gap-2"><i class="fa-solid fa-circle-minus"></i> マイナス在庫一覧</h2>
           <div class="flex items-center gap-2"><span class="text-xs font-bold bg-rose-100 text-rose-700 rounded-full px-3 py-0.5">{{ minusData.length }}件</span><button @click="loadMinusData()" :disabled="minusLoading" class="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-rose-200 text-rose-600 bg-white hover:bg-rose-50 transition-all disabled:opacity-40"><i class="fa-solid fa-arrows-rotate text-xs" :class="minusLoading?'spinner':''"></i> 更新</button></div>
+        </div>
+        <div class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-4 px-1">
+          <i class="fa-regular fa-clock"></i>
+          <span>リアルタイム (MedOrder API)</span>
         </div>
 
         <!-- 発注状況サマリーカード -->
@@ -818,6 +861,7 @@ createApp({
     const supplyQuery = ref(''); const supplyLastSearchedQuery = ref(''); const supplyResults = ref([]);
     const supplyIsLoading = ref(false); const supplyHasSearched = ref(false); const supplyErrorMsg = ref('');
     const lastUpdated = ref(''); const lowStockThreshold = ref(10);
+    const tabUpdatedTimes = ref({ inventory: '', return: '', dead: '', history: '', receive_history: '', collabo_history: '', epi_delivery: '' });
     const shelfData = ref([]); const shelfLoading = ref(false); const shelfError = ref('');
     const shelfFilter = ref(''); const shelfSort = ref('shelf');
     const openedShelves = ref(new Set()); const shelfSummaryOpen = ref('');
@@ -826,6 +870,7 @@ createApp({
     const liveData = ref([]); const liveLoading = ref(false); const liveError = ref(''); const liveFilterStr = ref('');
     const livePage = ref(1); const liveTotalCount = ref(0); const liveTotalPages = ref(1);
     const isScraping = ref(false);
+    const isReloadingAll = ref(false);
     const alertShelfFilter = ref(''); const alertUsageFilter = ref(''); const alertUnitFilter = ref('');
     const alertSort = ref('shelf'); const returnSort = ref('shelf'); const deadSort = ref('shelf');
 
@@ -915,7 +960,7 @@ createApp({
         const dateB = b.receiveDate ? new Date(b.receiveDate).getTime() : 0;
         return dateB - dateA;
       });
-      return d;
+      return d.slice(0, 500);
     });
 
     // ── 履歴タブ専用 ──
@@ -1128,8 +1173,22 @@ createApp({
     const toggleShelf = (id)=>{if(openedShelves.value.has(id)) openedShelves.value.delete(id);else openedShelves.value.add(id);};
 
     onMounted(()=>{
-      if(typeof google!=='undefined'&&google.script&&google.script.run)
+      if(typeof google!=='undefined'&&google.script&&google.script.run) {
         google.script.run.withSuccessHandler(r=>{if(r&&r.time) lastUpdated.value=r.time;}).withFailureHandler(()=>{}).getLastUpdated();
+        google.script.run.withSuccessHandler(r=>{
+          if(r) {
+            tabUpdatedTimes.value = {
+              inventory: r.inventory || r.global || '',
+              return: r.return || '',
+              dead: r.dead || '',
+              history: r.history || '',
+              receive_history: r.receive_history || '',
+              collabo_history: r.collabo_history || '',
+              epi_delivery: r.epi_delivery || '',
+            };
+          }
+        }).withFailureHandler(()=>{}).getAllLastUpdated();
+      }
       loadMemos();
       document.getElementById('search')?.focus();
     });
@@ -1285,11 +1344,81 @@ createApp({
       return n.replace(/[！-～]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xfee0));
     };
 
+    // ── 一括更新 ──
+    const reloadAllData = () => {
+      if (isReloadingAll.value) return;
+      isReloadingAll.value = true;
+      let completed = 0;
+      const totalTasks = 6;
+      const checkDone = () => { completed++; if (completed >= totalTasks) {
+        isReloadingAll.value = false;
+        // タブ別更新日時を再取得
+        if (typeof google!=='undefined'&&google.script&&google.script.run) {
+          google.script.run.withSuccessHandler(r=>{
+            if(r&&r.time) lastUpdated.value=r.time;
+          }).withFailureHandler(()=>{}).getLastUpdated();
+          google.script.run.withSuccessHandler(r=>{
+            if(r) {
+              tabUpdatedTimes.value = {
+                inventory: r.inventory || r.global || '',
+                return: r.return || '',
+                dead: r.dead || '',
+                history: r.history || '',
+                receive_history: r.receive_history || '',
+                collabo_history: r.collabo_history || '',
+                epi_delivery: r.epi_delivery || '',
+              };
+            }
+          }).withFailureHandler(()=>{}).getAllLastUpdated();
+        }
+      }};
+
+      if (typeof google!=='undefined'&&google.script&&google.script.run) {
+        // 棚番 (在庫)
+        google.script.run.withSuccessHandler(d=>{ shelfData.value=d||[]; checkDone(); }).withFailureHandler(()=>{ checkDone(); }).getShelfSummary();
+        // 返品
+        google.script.run.withSuccessHandler(d=>{ returnData.value=d||[]; checkDone(); }).withFailureHandler(()=>{ checkDone(); }).getReturnData();
+        // 不動
+        google.script.run.withSuccessHandler(d=>{ deadData.value=d||[]; checkDone(); }).withFailureHandler(()=>{ checkDone(); }).getDeadData();
+        // 発注履歴
+        google.script.run.withSuccessHandler(d=>{ historyData.value=d||[]; checkDone(); }).withFailureHandler(()=>{ checkDone(); }).getOrderHistory();
+        // 納品履歴
+        google.script.run.withSuccessHandler(d=>{ receiveData.value=d||[]; checkDone(); }).withFailureHandler(()=>{ checkDone(); }).getReceiveHistoryData();
+        // マイナス在庫
+        google.script.run.withSuccessHandler(r=>{ if(r&&!r.error) minusItems.value=r.items||[]; checkDone(); }).withFailureHandler(()=>{ checkDone(); }).getMinusStocks();
+      } else {
+        isReloadingAll.value = false;
+        alert('ダミーモード: 一括更新は実行できません');
+      }
+    };
+
+    // ── データ鮮度チェック ──
+    const isDataStale = computed(() => {
+      const inv = tabUpdatedTimes.value.inventory;
+      if (!inv) return false; // まだ読み込み中
+      // 'yyyy/MM/dd HH:mm' 形式をパース
+      const d = new Date(inv.replace(/\//g, '-'));
+      if (isNaN(d.getTime())) return false;
+      const diffMs = Date.now() - d.getTime();
+      return diffMs > 2 * 60 * 60 * 1000; // 2時間以上
+    });
+    const staleHoursText = computed(() => {
+      const inv = tabUpdatedTimes.value.inventory;
+      if (!inv) return '';
+      const d = new Date(inv.replace(/\//g, '-'));
+      if (isNaN(d.getTime())) return '';
+      const diffMs = Date.now() - d.getTime();
+      const hours = Math.floor(diffMs / (60 * 60 * 1000));
+      if (hours < 1) return Math.floor(diffMs / (60 * 1000)) + '分前';
+      if (hours < 24) return hours + '時間前';
+      return Math.floor(hours / 24) + '日前';
+    });
+
     return {
-      activeTab, searchQuery, lastSearchedQuery, results, isLoading, hasSearched, errorMsg, lastUpdated, lowStockThreshold,
+      activeTab, searchQuery, lastSearchedQuery, results, isLoading, hasSearched, errorMsg, lastUpdated, lowStockThreshold, tabUpdatedTimes,
       supplyQuery, supplyLastSearchedQuery, supplyResults, supplyIsLoading, supplyHasSearched, supplyErrorMsg, performSupplySearch, clearSupplySearch,
       primarySupplyResults, alternativeSupplyResults,
-      isScraping, triggerScrape,
+      isScraping, triggerScrape, isReloadingAll, reloadAllData,
       performSearch, clearSearch, primaryResults, alternativeResults, lowStockCount, isLowStock,
       normalizeUnit, convertEyedrop,
       switchToShelfTab, loadShelfData, shelfData, shelfLoading, shelfError, shelfFilter, shelfSort,
@@ -1307,6 +1436,7 @@ createApp({
       filteredMinusData, minusOrderFilter, minusOrderedCount, minusUnorderedCount,
       genericSortOptions, openOrderEpi, normalizeForSearch,
       memos, editingMemo, editingMemoText, memoSaving, loadMemos, toggleMemoEdit, saveMemoAction,
+      isDataStale, staleHoursText,
     };
   }
 }).mount('#app');
