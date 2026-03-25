@@ -362,8 +362,8 @@ async def extract_medorder(browser):
                     medorder_token = auth.replace("Bearer ", "")
 
         m_page.on("request", capture_token)
-        await m_page.goto("https://app.medorder.jp/pharmacies/20/stocks", wait_until="domcontentloaded")
-        await asyncio.sleep(2)
+        await m_page.goto("https://app.medorder.jp/pharmacies/20/stocks", wait_until="networkidle")
+        await asyncio.sleep(3)
         
         current_url = m_page.url
         # users/sign_in (旧) または auth0.com (新) のログインページを検出
@@ -382,54 +382,36 @@ async def extract_medorder(browser):
                     await m_page.fill("#user_email", email)
                     await m_page.fill("#user_password", password)
                     await m_page.click("input[type='submit']")
-                await m_page.wait_for_load_state("domcontentloaded")
+                await m_page.wait_for_load_state("networkidle", timeout=30000)
                 await asyncio.sleep(3)
                 print(f"[{datetime.now()}] ログイン後URL: {m_page.url[:80]}")
                 # ログイン後、stocks ページへ再ナビゲートして API リクエストを発火させる
                 if "stocks" not in m_page.url:
                     print(f"[{datetime.now()}] stocks ページへ再ナビゲート中...")
-                    await m_page.goto("https://app.medorder.jp/pharmacies/20/stocks", wait_until="domcontentloaded")
-                    await asyncio.sleep(5)
+                    await m_page.goto("https://app.medorder.jp/pharmacies/20/stocks", wait_until="networkidle")
+                    await asyncio.sleep(3)
                     print(f"[{datetime.now()}] 再ナビゲート後URL: {m_page.url[:80]}")
             else:
                 report_status("Login Required")
                 print(f"[{datetime.now()}] [WARNING] 認証情報なし。ログインが必要です。")
         
-        import json, re
-        for _ in range(15):  # 15秒間、Storage上のトークン有無と通信の両方を監視
-            if medorder_token: break
-            
-            try:
-                # LocalStorage等をダンプして Auth0 の access_token を直接抜く
-                ls_data = await m_page.evaluate("() => JSON.stringify(window.localStorage || {})")
-                ss_data = await m_page.evaluate("() => JSON.stringify(window.sessionStorage || {})")
-                for store in [json.loads(ls_data), json.loads(ss_data)]:
-                    for val in store.values():
-                        if isinstance(val, str):
-                            if '"access_token":"' in val:
-                                match = re.search(r'"access_token":"([^"]+)"', val)
-                                if match:
-                                    medorder_token = match.group(1)
-                                    print(f"[{datetime.now()}] LocalStorageからトークンを直接取得しました。")
-                                    break
-                    if medorder_token: break
-            except Exception as e:
-                pass
-                
-            if medorder_token: break
-            await asyncio.sleep(1)
-            
-        if not medorder_token:
-            print(f"[{datetime.now()}] LocalStorageからトークンを取得できませんでした。強制フェッチを実行します(Tier 2)...")
+        # --- トークン取得: ネットワークスニッファー優先 ---
+        # Auth0 SPA SDK はトークンをLocalStorageに保存しない（メモリ内管理）。
+        # networkidle 完了時点で capture_token コールバックが Bearer を捕捉済みのはず。
+        if medorder_token:
+            print(f"[{datetime.now()}] ネットワークスニッファーでトークンを捕捉済み。")
+        else:
+            # Tier 2: 強制的にAPI fetchを発火してスニッファーに捕捉させる
+            print(f"[{datetime.now()}] ネットワークスニッファーでトークン未取得。強制フェッチを実行(Tier 2)...")
             try:
                 await m_page.evaluate("fetch('https://medorder-api.pharmacloud.jp/api/v2/pharmacy', {credentials: 'include'})")
-                for _ in range(5):
+                for _ in range(10):
                     if medorder_token:
                         print(f"[{datetime.now()}] 強制フェッチによりトークンを捕捉しました。")
                         break
                     await asyncio.sleep(1)
             except Exception as e:
-                print(f"[{datetime.now()}] 強制フェッチに失敗しました: {e}")
+                print(f"[{datetime.now()}] 強制フェッチに失敗: {e}")
         
         if medorder_token:
             t_val: str = str(medorder_token)
