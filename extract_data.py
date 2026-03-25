@@ -137,45 +137,63 @@ async def extract_looker_studio(browser, state_path):
             print(f"[{datetime.now()}] 最終フォールバック: ロケーター試行")
             await pg.locator("text=/^CSV$/").first.click(timeout=10000, force=True)
 
-        # 在庫日次
-        try:
-            await page.locator("text='在庫 - 日次'").first.click(timeout=30000)
-            table_title = page.locator("text='品目別の在庫数'").first
-            await table_title.wait_for(state="visible", timeout=60000)
-            await asyncio.sleep(5)  # チャートデータ描画完了を待つ
-            
-            box = await table_title.bounding_box()
-            if box:
-                # データエリア（タイトルの 50px 下）を右クリック（実績あり）
-                await page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height'] + 50, button="right")
-            else:
-                await table_title.click(button="right")
-            await asyncio.sleep(1)
-            
-            await page.locator("text=/グラフをエクスポート/").first.click(timeout=15000, force=True)
-            await page.locator("text=/データのエクスポート/").first.click(timeout=15000, force=True)
-            await click_csv_option(page)
-            
-            async with page.expect_download() as download_info:
-                await page.locator("role=button[name='エクスポート']").click(force=True)
-            download = await download_info.value
-            current_date = datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_path = os.path.join(DOWNLOAD_DIR, f"inventory_export_{current_date}.csv")
-            await download.save_as(file_path)
-            with open(file_path, 'r', encoding='utf-8') as f:
-                requests.post(GAS_WEB_APP_URL, params={'type': 'inventory'}, data=f.read().encode('utf-8'))
-            print(f"[{datetime.now()}] Looker Studio Inventory: Success")
-        except Exception as e_inv:
-            err = f"在庫日次エクスポート失敗: {e_inv}"
-            print(f"[{datetime.now()}] [ERROR] {err}")
-            send_log(f"Phase1 CRITICAL: {err}")
+        # ── 在庫日次 (1日1回のみ実行する制限を追加) ──
+        lock_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory_daily_lock.txt")
+        today_str = datetime.now().strftime("%Y%m%d")
+        already_run_today = False
+        
+        if os.path.exists(lock_file):
+            with open(lock_file, "r", encoding="utf-8") as lf:
+                if lf.read().strip() == today_str:
+                    already_run_today = True
+
+        if already_run_today:
+            print(f"[{datetime.now()}] [INFO] 在庫日次データは本日すでに抽出・送信済みのためスキップします。")
+            send_log("在庫日次の抽出は1日1回制限のためスキップされました。")
+        else:
             try:
-                await page.keyboard.press("Escape")
+                await page.locator("text='在庫 - 日次'").first.click(timeout=30000)
+                table_title = page.locator("text='品目別の在庫数'").first
+                await table_title.wait_for(state="visible", timeout=60000)
+                await asyncio.sleep(5)  # チャートデータ描画完了を待つ
+                
+                box = await table_title.bounding_box()
+                if box:
+                    # データエリア（タイトルの 50px 下）を右クリック（実績あり）
+                    await page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height'] + 50, button="right")
+                else:
+                    await table_title.click(button="right")
                 await asyncio.sleep(1)
-            except Exception:
-                pass
-            # 在庫データは最重要 — 失敗を伝播してGitHub Actionsを失敗させる
-            raise RuntimeError(err) from e_inv
+                
+                await page.locator("text=/グラフをエクスポート/").first.click(timeout=15000, force=True)
+                await page.locator("text=/データのエクスポート/").first.click(timeout=15000, force=True)
+                await click_csv_option(page)
+                
+                async with page.expect_download() as download_info:
+                    await page.locator("role=button[name='エクスポート']").click(force=True)
+                download = await download_info.value
+                current_date = datetime.now().strftime("%Y%m%d_%H%M%S")
+                file_path = os.path.join(DOWNLOAD_DIR, f"inventory_export_{current_date}.csv")
+                await download.save_as(file_path)
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    requests.post(GAS_WEB_APP_URL, params={'type': 'inventory'}, data=f.read().encode('utf-8'))
+                print(f"[{datetime.now()}] Looker Studio Inventory: Success")
+                
+                # 成功時に本日の日付をロックファイルに書き込む
+                with open(lock_file, "w", encoding="utf-8") as lf:
+                    lf.write(today_str)
+                    
+            except Exception as e_inv:
+                err = f"在庫日次エクスポート失敗: {e_inv}"
+                print(f"[{datetime.now()}] [ERROR] {err}")
+                send_log(f"Phase1 CRITICAL: {err}")
+                try:
+                    await page.keyboard.press("Escape")
+                    await asyncio.sleep(1)
+                except Exception:
+                    pass
+                # 在庫データは最重要 — 失敗を伝播してGitHub Actionsを失敗させる
+                raise RuntimeError(err) from e_inv
 
         async def export_table_to_csv(title_text, export_type):
             """セクションタイトル直下にある最初のtdセルを右クリックしてCSVエクスポート"""
