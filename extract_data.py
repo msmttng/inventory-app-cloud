@@ -395,9 +395,41 @@ async def extract_medorder(browser):
                 report_status("Login Required")
                 print(f"[{datetime.now()}] [WARNING] 認証情報なし。ログインが必要です。")
         
-        for _ in range(60):  # 60秒待機
+        import json, re
+        for _ in range(15):  # 15秒間、Storage上のトークン有無と通信の両方を監視
+            if medorder_token: break
+            
+            try:
+                # LocalStorage等をダンプして Auth0 の access_token を直接抜く
+                ls_data = await m_page.evaluate("() => JSON.stringify(window.localStorage || {})")
+                ss_data = await m_page.evaluate("() => JSON.stringify(window.sessionStorage || {})")
+                for store in [json.loads(ls_data), json.loads(ss_data)]:
+                    for val in store.values():
+                        if isinstance(val, str):
+                            if '"access_token":"' in val:
+                                match = re.search(r'"access_token":"([^"]+)"', val)
+                                if match:
+                                    medorder_token = match.group(1)
+                                    print(f"[{datetime.now()}] LocalStorageからトークンを直接取得しました。")
+                                    break
+                    if medorder_token: break
+            except Exception as e:
+                pass
+                
             if medorder_token: break
             await asyncio.sleep(1)
+            
+        if not medorder_token:
+            print(f"[{datetime.now()}] LocalStorageからトークンを取得できませんでした。強制フェッチを実行します(Tier 2)...")
+            try:
+                await m_page.evaluate("fetch('https://medorder-api.pharmacloud.jp/api/v2/pharmacy', {credentials: 'include'})")
+                for _ in range(5):
+                    if medorder_token:
+                        print(f"[{datetime.now()}] 強制フェッチによりトークンを捕捉しました。")
+                        break
+                    await asyncio.sleep(1)
+            except Exception as e:
+                print(f"[{datetime.now()}] 強制フェッチに失敗しました: {e}")
         
         if medorder_token:
             t_val: str = str(medorder_token)
