@@ -56,6 +56,8 @@ async def extract_looker_studio(browser, state_path):
             current_url = page.url
             if "accountchooser" in current_url or "accounts.google.com" in current_url:
                 print(f"[{datetime.now()}] Googleアカウント選択ページを検出: {current_url[:80]}")
+                # state.json 失効を通知
+                send_log("⚠️ Google認証(state.json)が失効しています。generate_state.py で再生成してください。")
                 # 最初のアカウント行をクリック（Signed out でもクリックして進む）
                 try:
                     account_btn = page.locator("li[aria-label], [data-email], .account-name").first
@@ -87,8 +89,29 @@ async def extract_looker_studio(browser, state_path):
         # ── CSVクリック共通ヘルパー ──
         async def click_csv_option(pg):
             """エクスポートダイアログの CSV 選択肢を複数の方法で確実にクリックする"""
-            # ダイアログが完全に描画されるのを待つ
-            await asyncio.sleep(5)
+            # ダイアログが完全に描画されるのを待つ（ポーリング: 最大15秒）
+            # 成功ログ: H2:データのエクスポート + LABEL:CSV が表示される
+            dialog_ready = False
+            for _wait in range(15):
+                try:
+                    has_csv = await pg.evaluate("""
+                        () => {
+                            const all = Array.from(document.querySelectorAll('*'));
+                            return all.some(el => {
+                                const t = el.textContent.trim();
+                                return t.includes('CSV') && el.children.length === 0 && t.length < 20;
+                            });
+                        }
+                    """)
+                    if has_csv:
+                        dialog_ready = True
+                        print(f"[{datetime.now()}] エクスポートダイアログ描画完了 ({_wait+1}秒)")
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(1)
+            if not dialog_ready:
+                print(f"[{datetime.now()}] [WARNING] エクスポートダイアログのCSV描画を15秒待機しましたが検出できません")
 
             # デバッグ: ダイアログ周辺のテキストを出力
             try:
