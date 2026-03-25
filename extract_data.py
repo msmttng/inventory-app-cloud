@@ -165,8 +165,8 @@ async def extract_looker_studio(browser, state_path):
                     await table_title.click(button="right")
                 await asyncio.sleep(1)
                 
-                await page.locator("text=/グラフをエクスポート/").first.click(timeout=15000, force=True)
-                await page.locator("text=/データのエクスポート/").first.click(timeout=15000, force=True)
+                await page.locator("text=/グラフをエクスポート/").first.click(timeout=30000, force=True)
+                await page.locator("text=/データのエクスポート/").first.click(timeout=30000, force=True)
                 await click_csv_option(page)
                 
                 async with page.expect_download() as download_info:
@@ -244,8 +244,8 @@ async def extract_looker_studio(browser, state_path):
                     await page.keyboard.press("Escape")
                     raise RuntimeError(f"'{title_text}': グラフをエクスポートメニューが表示されませんでした")
 
-            await page.locator("text=/グラフをエクスポート/").first.click(timeout=15000, force=True)
-            await page.locator("text=/データのエクスポート/").first.click(timeout=15000, force=True)
+            await page.locator("text=/グラフをエクスポート/").first.click(timeout=30000, force=True)
+            await page.locator("text=/データのエクスポート/").first.click(timeout=30000, force=True)
             await click_csv_option(page)
             date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             async with page.expect_download() as dl_info:
@@ -317,8 +317,8 @@ async def extract_looker_studio(browser, state_path):
                 if box:
                     await page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2, button="right")
                     await asyncio.sleep(1)
-                    await page.locator("text=/グラフをエクスポート/").first.click(timeout=15000, force=True)
-                    await page.locator("text=/データのエクスポート/").first.click(timeout=15000, force=True)
+                    await page.locator("text=/グラフをエクスポート/").first.click(timeout=30000, force=True)
+                    await page.locator("text=/データのエクスポート/").first.click(timeout=30000, force=True)
                     await click_csv_option(page)
                     date_str_r = datetime.now().strftime("%Y%m%d_%H%M%S")
                     async with page.expect_download() as dl_info_r:
@@ -386,7 +386,7 @@ async def extract_medorder(browser):
                 await asyncio.sleep(3)
                 print(f"[{datetime.now()}] ログイン後URL: {m_page.url[:80]}")
                 # ログイン後、stocks ページへ再ナビゲートして API リクエストを発火させる
-                if "medorder.jp" not in m_page.url:
+                if "stocks" not in m_page.url:
                     print(f"[{datetime.now()}] stocks ページへ再ナビゲート中...")
                     await m_page.goto("https://app.medorder.jp/pharmacies/20/stocks", wait_until="domcontentloaded")
                     await asyncio.sleep(5)
