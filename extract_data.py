@@ -87,20 +87,41 @@ async def extract_looker_studio(browser, state_path):
         # ── CSVクリック共通ヘルパー ──
         async def click_csv_option(pg):
             """エクスポートダイアログの CSV 選択肢を複数の方法で確実にクリックする"""
-            # ダイアログが完全に描画されるのを待つ（4秒で余裕を持たせる）
-            await asyncio.sleep(4)
+            # ダイアログが完全に描画されるのを待つ
+            await asyncio.sleep(5)
 
-            # 戦略1: JS で全要素を走査して textContent が厳密に 'CSV' のものをクリック
+            # デバッグ: ダイアログ周辺のテキストを出力
+            try:
+                dialog_texts = await pg.evaluate("""
+                    () => {
+                        const texts = [];
+                        document.querySelectorAll('*').forEach(el => {
+                            const t = el.textContent.trim();
+                            if (t && (t.includes('CSV') || t.includes('csv') || t.includes('Google') || t.includes('エクスポート') || t.includes('形式')) && t.length < 80 && el.children.length === 0) {
+                                texts.push(el.tagName + ':' + t);
+                            }
+                        });
+                        return [...new Set(texts)].slice(0, 20);
+                    }
+                """)
+                print(f"[{datetime.now()}] ダイアログ内テキスト: {dialog_texts}")
+            except Exception:
+                pass
+
+            # 戦略1: JS で全要素を走査して CSV を含むものをクリック
             clicked = await pg.evaluate("""
                 () => {
                     const all = Array.from(document.querySelectorAll('*'));
-                    // 子要素なし（葉ノード）でテキストが 'CSV' の要素を優先
-                    const exact = all.find(el => {
+                    // 完全一致（葉ノード）
+                    const exact = all.find(el => el.textContent.trim() === 'CSV' && el.children.length === 0);
+                    if (exact) { exact.click(); return 'leaf-exact'; }
+                    // CSV を含む短いテキスト（葉ノード）
+                    const partial = all.find(el => {
                         const t = el.textContent.trim();
-                        return t === 'CSV' && el.children.length === 0;
+                        return t.includes('CSV') && el.children.length === 0 && t.length < 20;
                     });
-                    if (exact) { exact.click(); return 'leaf'; }
-                    // 次点: textContent が 'CSV' の最初の要素
+                    if (partial) { partial.click(); return 'leaf-partial:' + partial.textContent.trim(); }
+                    // 完全一致（子要素あり）
                     const loose = all.find(el => el.textContent.trim() === 'CSV');
                     if (loose) { loose.click(); return 'loose'; }
                     return null;
@@ -110,21 +131,42 @@ async def extract_looker_studio(browser, state_path):
                 print(f"[{datetime.now()}] CSV JS click 成功 (strategy: {clicked})")
                 return
 
-            print(f"[{datetime.now()}] JS click失敗 - XPath で再試行")
-            # 戦略2: XPath でテキストが完全一致するノードの親要素をクリック
-            try:
-                await pg.locator("xpath=(//*[normalize-space(text())='CSV'])[1]").click(timeout=8000, force=True)
-                print(f"[{datetime.now()}] CSV XPath click 成功")
+            print(f"[{datetime.now()}] JS click失敗 - ラジオボタン・リスト項目で再試行")
+            # 戦略2: ダイアログ内のラジオボタンまたは選択肢の2番目をクリック（CSVは通常2番目）
+            clicked2 = await pg.evaluate("""
+                () => {
+                    const radios = document.querySelectorAll('input[type="radio"]');
+                    if (radios.length >= 2) { radios[1].click(); return 'radio-2nd'; }
+                    const items = document.querySelectorAll('[role="option"], [role="radio"], [role="menuitemradio"]');
+                    if (items.length >= 2) { items[1].click(); return 'role-2nd'; }
+                    const matRadios = document.querySelectorAll('[class*="radio"], [class*="Radio"]');
+                    if (matRadios.length >= 2) { matRadios[1].click(); return 'class-radio-2nd'; }
+                    return null;
+                }
+            """)
+            if clicked2:
+                print(f"[{datetime.now()}] CSV ラジオ/リスト click 成功 (strategy: {clicked2})")
                 return
-            except Exception:
-                pass
 
-            print(f"[{datetime.now()}] XPath click失敗 - キーボード Tab で試行")
-            # 戦略3: Tab キーでフォーカスを当ててEnterで選択
+            print(f"[{datetime.now()}] ラジオ失敗 - XPath で再試行")
+            # 戦略3: XPath（完全一致 → 部分一致）
+            for xpath_expr, label in [
+                ("(//*[normalize-space(text())='CSV'])[1]", "exact"),
+                ("(//*[contains(text(),'CSV')])[1]", "contains"),
+            ]:
+                try:
+                    await pg.locator(f"xpath={xpath_expr}").click(timeout=5000, force=True)
+                    print(f"[{datetime.now()}] CSV XPath click 成功 ({label})")
+                    return
+                except Exception:
+                    pass
+
+            print(f"[{datetime.now()}] XPath失敗 - キーボード Tab で試行")
+            # 戦略4: Tab キーでフォーカスを当ててEnterで選択
             try:
-                for _ in range(5):
+                for _ in range(8):
                     focused_text = await pg.evaluate("document.activeElement ? document.activeElement.textContent.trim() : ''")
-                    if focused_text == 'CSV':
+                    if 'CSV' in focused_text:
                         await pg.keyboard.press("Enter")
                         print(f"[{datetime.now()}] CSV Tab+Enter 成功")
                         return
@@ -133,9 +175,13 @@ async def extract_looker_studio(browser, state_path):
             except Exception:
                 pass
 
-            # 戦略4: 最終フォールバック - ロケーター
-            print(f"[{datetime.now()}] 最終フォールバック: ロケーター試行")
-            await pg.locator("text=/^CSV$/").first.click(timeout=10000, force=True)
+            # 戦略5: 最終フォールバック — CSV が見つからなければデフォルト形式でエクスポート
+            print(f"[{datetime.now()}] CSV選択をスキップし、デフォルト形式でエクスポートを試行します")
+            try:
+                await pg.locator("text=/CSV/i").first.click(timeout=5000, force=True)
+                print(f"[{datetime.now()}] CSV locator click 成功")
+            except Exception:
+                print(f"[{datetime.now()}] [WARNING] CSV選択不可 — デフォルト形式でエクスポートを続行")
 
         # ── 在庫日次 (1日1回のみ実行する制限を追加) ──
         lock_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory_daily_lock.txt")
