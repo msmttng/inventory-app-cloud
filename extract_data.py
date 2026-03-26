@@ -234,12 +234,13 @@ async def extract_looker_studio(browser, state_path):
                     await table_title.click(button="right")
                 await asyncio.sleep(1)
                 
-                await page.locator("text=/グラフをエクスポート/").first.click(timeout=30000, force=True)
-                await page.locator("text=/データのエクスポート/").first.click(timeout=30000, force=True)
+                await page.locator("text=/グラフをエクスポート/").first.click(timeout=30000)
+                await asyncio.sleep(0.5)
+                await page.locator("text=/データのエクスポート/").first.click(timeout=30000)
                 await click_csv_option(page)
                 
                 async with page.expect_download() as download_info:
-                    await page.locator("role=button[name='エクスポート']").click(force=True)
+                    await page.locator("role=button[name='エクスポート']").click()
                 download = await download_info.value
                 current_date = datetime.now().strftime("%Y%m%d_%H%M%S")
                 file_path = os.path.join(DOWNLOAD_DIR, f"inventory_export_{current_date}.csv")
@@ -313,12 +314,13 @@ async def extract_looker_studio(browser, state_path):
                     await page.keyboard.press("Escape")
                     raise RuntimeError(f"'{title_text}': グラフをエクスポートメニューが表示されませんでした")
 
-            await page.locator("text=/グラフをエクスポート/").first.click(timeout=30000, force=True)
-            await page.locator("text=/データのエクスポート/").first.click(timeout=30000, force=True)
+            await page.locator("text=/グラフをエクスポート/").first.click(timeout=30000)
+            await asyncio.sleep(0.5)
+            await page.locator("text=/データのエクスポート/").first.click(timeout=30000)
             await click_csv_option(page)
             date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             async with page.expect_download() as dl_info:
-                await page.locator("role=button[name='エクスポート']").click(force=True)
+                await page.locator("role=button[name='エクスポート']").click()
             dl = await dl_info.value
             f_path = os.path.join(DOWNLOAD_DIR, f"{export_type}_export_{date_str}.csv")
             await dl.save_as(f_path)
@@ -386,12 +388,13 @@ async def extract_looker_studio(browser, state_path):
                 if box:
                     await page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2, button="right")
                     await asyncio.sleep(1)
-                    await page.locator("text=/グラフをエクスポート/").first.click(timeout=30000, force=True)
-                    await page.locator("text=/データのエクスポート/").first.click(timeout=30000, force=True)
+                    await page.locator("text=/グラフをエクスポート/").first.click(timeout=30000)
+                    await asyncio.sleep(0.5)
+                    await page.locator("text=/データのエクスポート/").first.click(timeout=30000)
                     await click_csv_option(page)
                     date_str_r = datetime.now().strftime("%Y%m%d_%H%M%S")
                     async with page.expect_download() as dl_info_r:
-                        await page.locator("role=button[name='エクスポート']").click(force=True)
+                        await page.locator("role=button[name='エクスポート']").click()
                     dl_r = await dl_info_r.value
                     f_path_r = os.path.join(DOWNLOAD_DIR, f"receive_export_{date_str_r}.csv")
                     await dl_r.save_as(f_path_r)
