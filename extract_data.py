@@ -16,7 +16,7 @@ if os.path.exists(".env"):
                 os.environ[key] = value
 
 # 設定
-GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwDhj91LpWaF6OWhTmr6hbYLgScu0tlBcs2Y4nyXvg2WAwybHYGd5-V579tf0I5_H2dCQ/exec"
+GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxRmB7n67cNfGBfQaXXLwK3_QXIupiF-90c6AZsWa4IhaPspf4DkvXw-mTS2kVb1AL_jw/exec"
 LOOKER_STUDIO_URL = "https://lookerstudio.google.com/reporting/fd3dd8c8-38ab-4cc0-bad4-c23552bb7209/page/p_9rj9sjgqvc?pli=1"
 DOWNLOAD_DIR = "/tmp/downloads" if os.name != 'nt' else os.environ.get('TEMP', '.')
 
@@ -37,17 +37,40 @@ def send_log(log_msg: str):
     except Exception as e:
         print(f"[{datetime.now()}] Log send failed: {e}")
 
-async def extract_looker_studio(browser, state_path):
+async def extract_looker_studio(p, browser, state_path):
     print(f"\n[{datetime.now()}] --- PHASE 1: Looker Studio からのデータ抽出 ---")
     browser_context = None
     try:
-        if state_path and os.path.exists(state_path):
-            browser_context = await browser.new_context(storage_state=state_path, viewport={'width': 1920, 'height': 1080})
+        user_data_path = r"C:\Users\masam\.gemini\antigravity\scratch\playwright_profile"
+        
+        # 実行環境がローカルかクラウド(GitHub Actions等)かを判定
+        is_cloud = os.environ.get("GITHUB_ACTIONS") or os.environ.get("GOOGLE_AUTH_STATE_BASE64")
+        
+        if is_cloud:
+            print(f"[{datetime.now()}] [INFO] クラウド環境のため、従来通り state.json を使用します。")
+            if state_path and os.path.exists(state_path):
+                browser_context = await browser.new_context(storage_state=state_path, viewport={'width': 1920, 'height': 1080})
+            else:
+                print(f"[{datetime.now()}] [WARNING] Looker Studio: 認証情報（state.json）がありません。失敗する可能性があります。")
+                browser_context = await browser.new_context(viewport={'width': 1920, 'height': 1080})
+            page = await browser_context.new_page()
         else:
-            print(f"[{datetime.now()}] [WARNING] Looker Studio: 認証情報（state.json）がありません。失敗する可能性があります。")
-            browser_context = await browser.new_context(viewport={'width': 1920, 'height': 1080})
+            print(f"[{datetime.now()}] [INFO] ローカル環境のため、永続プロファイルを使用します: {user_data_path}")
+            if not os.path.exists(user_data_path):
+                os.makedirs(user_data_path, exist_ok=True)
+            
+            browser_context = await p.chromium.launch_persistent_context(
+                user_data_dir=user_data_path,
+                channel="chrome",
+                headless=True, # バックグラウンドで実行するように変更
+                no_viewport=True,
+                args=['--start-maximized', '--disable-blink-features=AutomationControlled']
+            )
+            if len(browser_context.pages) > 0:
+                page = browser_context.pages[0]
+            else:
+                page = await browser_context.new_page()
 
-        page = await browser_context.new_page()
         await page.goto(LOOKER_STUDIO_URL, wait_until="domcontentloaded")
         await asyncio.sleep(3)
 
@@ -529,9 +552,62 @@ async def extract_medorder(browser):
                 print(f"[{datetime.now()}] 薬品名マップ {len(item_name_map)}件 を送信中...")
                 requests.post(GAS_WEB_APP_URL, params={'type': 'medorder_names'}, data=json.dumps(item_name_map, ensure_ascii=False).encode('utf-8'))
             
+            # --- FETCH DELIVERIES VIA API ---
+            print(f"[{datetime.now()}] MedOrder納品履歴APIを取得中...")
+            deliveries_csv = []
+            try:
+                d_res = requests.get("https://medorder-api.pharmacloud.jp/api/v2/pharmacy/pharmacies/20/sdcvan_delivery_d_records?status=20&page=1", headers=headers, timeout=15)
+                if d_res.status_code == 200:
+                    d_data = d_res.json()
+                    for item in d_data:
+                        dn = item.get('name', '').replace(',', ' ').strip()
+                        dd = item.get('slipped_on', '')
+                        dq = item.get('quantity', '')
+                        dealer_code = str(item.get('s_record', {}).get('dealer_code', ''))
+                        
+                        # medorder dealer codes to names (guessing based on typical codes)
+                        dealer_name = 'MedOrder卸'
+                        if dealer_code.startswith('9'):
+                            if '156' in dealer_code: dealer_name = 'スズケン'
+                            elif '122' in dealer_code: dealer_name = 'メディセオ'
+                            elif '960' in dealer_code: dealer_name = 'アルフレッサ'
+                            elif '261' in dealer_code: dealer_name = '東邦薬品'
+                        deliveries_csv.append(f"{dd},{dn},{dealer_name},{dq}")
+                print(f"[{datetime.now()}] 納品履歴 {len(deliveries_csv)}件 取得完了")
+            except Exception as de:
+                print(f"[{datetime.now()}] 納品履歴API取得エラー: {de}")
+
+            # --- FETCH ORDERS VIA API ---
+            print(f"[{datetime.now()}] MedOrder発注履歴APIを取得中...")
+            orders_csv = []
+            try:
+                # v2/pharmacy/pharmacies/20/orders
+                o_res = requests.get("https://medorder-api.pharmacloud.jp/api/v2/pharmacy/pharmacies/20/orders?status=completed&page=1", headers=headers, timeout=15)
+                if o_res.status_code == 200:
+                    o_data = o_res.json()
+                    for order in o_data:
+                        odate_raw = order.get('ordered_at', '')[:10].replace('-', '/')
+                        status = '完了' if order.get('state') == 'completed' else order.get('state', '')
+                        for i_obj in order.get('items', []):
+                            item_id = str(i_obj.get('orderable_item', {}).get('stockable_item_id', ''))
+                            qty = i_obj.get('quantity', '')
+                            dealer_id = str(i_obj.get('dealer_id', ''))
+                            
+                            # Map item_id
+                            n_obj = item_name_map.get(item_id, {})
+                            item_name = n_obj.get('name', '名称不明').replace(',', ' ')
+                            
+                            # DEALER_MAP in GAS: 31:メディセオ, 36:スズケン, 46:東邦, 58:アルフレッサ
+                            d_name = 'アルフレッサ' if dealer_id == '58' else 'メディセオ' if dealer_id == '31' else 'スズケン' if dealer_id == '36' else '東邦' if dealer_id == '46' else dealer_id
+                            
+                            orders_csv.append(f"{odate_raw},{status},,{item_name},,,{qty},{d_name},")
+                print(f"[{datetime.now()}] 発注履歴 {len(orders_csv)}件 取得完了")
+            except Exception as oe:
+                print(f"[{datetime.now()}] 発注履歴API取得エラー: {oe}")
+            
             report_status("OK")
             await m_page.close()
-            return "MedOrder Success"
+            return {"status": "MedOrder Success", "deliveries": deliveries_csv, "orders": orders_csv}
         else:
             status = "Login Required" if "users/sign_in" in m_page.url else "Timeout"
             report_status(status)
@@ -706,14 +782,13 @@ async def extract_orderepi(browser):
                 pass
         
         if table_found and added_rows > 0:
-            csv_data = "発注日,状態,メーカー,品名,規格,単位,数量,発注先,納品予定\n" + csv_data_body
-            requests.post(GAS_WEB_APP_URL, params={'type': 'history'}, data=csv_data.encode('utf-8'))
             print(f"[{datetime.now()}] Order-EPI History: Success ({added_rows} rows)")
         else:
-            print(f"[{datetime.now()}] [WARNING] Order-EPI 発注履歴テーブルが見つかりませんでした（配送予定データは送信済み）")
+            print(f"[{datetime.now()}] [WARNING] Order-EPI 発注履歴テーブルが見つかりませんでした")
         
         await page.close()
-        return {"status": f"OrderEPI Success (delivery={len(delivery_status_map)}, history={added_rows} rows)", "delivery_map": delivery_status_map}
+        return {"status": f"OrderEPI Success", "orders": csv_data_body.splitlines(), "delivery_map": delivery_status_map}
+
         
     except Exception as e:
         err_msg = f"Order-EPI Error: {e}"
@@ -723,97 +798,115 @@ async def extract_orderepi(browser):
         if browser_context:
             await browser_context.close()
 
-async def extract_collabo(browser):
-    print(f"\n[{datetime.now()}] --- PHASE 4: Collabo Portal からの発注履歴抽出 ---")
-    collabo_id = os.environ.get("COLLABO_ID")
-    collabo_password = os.environ.get("COLLABO_PASSWORD")
-    
-    if not collabo_id or not collabo_password:
-        print(f"[{datetime.now()}] [WARNING] COLLABO_ID または COLLABO_PASSWORD が設定されていないため、Phase 4はスキップします。")
-        return {"status": "Collabo Skipped", "delivery_items": []}
 
-    browser_context = None
+async def extract_pharma_dashboard():
+    print(f"[{datetime.now()}] --- PHASE 4: Pharma Dashboard 未納未定データ取得 ---")
     try:
-        browser_context = await browser.new_context(viewport={'width': 1920, 'height': 1080})
-        page = await browser_context.new_page()
-        
-        print(f"[{datetime.now()}] Collabo Portal ログインページへアクセス中...")
-        await page.goto("https://szgp-app1.collaboportal.com/frontend#/", wait_until="domcontentloaded")
-        await asyncio.sleep(2)
-        
-        # ログインフォームの処理
-        if await page.locator("input[placeholder='ログインID']").count() > 0 or await page.locator("input[type='password']").count() > 0:
-            print(f"[{datetime.now()}] Collabo Portal ログインシーケンス開始...")
+        res = requests.get("https://msmttng.github.io/pharma-dashboard/pharma_data.json", timeout=15)
+        if res.status_code == 200:
+            data = res.json()
+            missing_items = []
             
-            # fill ID (assuming input with type text or similar, check placeholder)
-            await page.fill("input[placeholder='ログインID'], input[type='text'], input[name='loginId']", collabo_id)
-            await page.fill("input[type='password']", collabo_password)
-            await page.click("button:has-text('ログイン'), button[type='submit']")
-            await page.wait_for_load_state("domcontentloaded")
-            await asyncio.sleep(5)
-            
-        print(f"[{datetime.now()}] Collabo Portal NoukiSearchへアクセス中...")
-        await page.goto("https://szgp-app1.collaboportal.com/frontend#/NoukiSearch", wait_until="networkidle")
-        await asyncio.sleep(5) # wait for data to fetch
-        
-        from bs4 import BeautifulSoup
-        html = await page.content()
-        soup = BeautifulSoup(html, "html.parser")
-        
-        # Extract items from the table using playwright locators
-        table_rows = page.locator("table tr")
-        count = await table_rows.count()
-        
-        csv_data_body = ""
-        added_rows = 0
-        collabo_delivery_items = []
-        
-        if count > 0:
-            for i in range(count):
-                texts = await table_rows.nth(i).locator("td").all_inner_texts()
-                # Indexes: 0:No 1:受付日時 2:'' 3:商品コード 4:メーカー 5:品名・規格・容量 6:発注数 7:納品予定数 8:納品予定日 9:状況
-                if len(texts) >= 9:
-                     # Skip header
-                     if '品名' in texts[5] or '受付' in texts[1]:
-                         continue
-                         
-                     name_col = texts[5]
-                     qty_col = texts[6]
-                     date_col = texts[8]
-                     maker_col = texts[4]
-                     status_col = texts[9]
-                     
-                     # Extract MM/DD from date_col
-                     import re
-                     date_match = re.search(r'(\d{1,2}/\d{1,2})', date_col)
-                     delivery_date = date_match.group(1) if date_match else "取得前"
-                     
-                     if "出荷調整" in status_col or "未定" in status_col:
-                         delivery_date = "入荷未定"
-                     
-                     # Clean name
-                     name_clean = name_col.replace('\n', ' ').strip()
-                     if name_clean:
-                         csv_data_body += f"'{datetime.now().strftime('%Y/%m/%d')},完了,{maker_col},{name_clean},,箱,{qty_col},Collabo,{delivery_date}\n"
-                         collabo_delivery_items.append({"name": name_clean, "date": delivery_date, "source": "スズケン"})
-                         added_rows += 1
-                         
-        if added_rows > 0:
-            csv_data = "発注日,状態,メーカー,品名,規格,単位,数量,発注先,納品予定\n" + csv_data_body
-            requests.post(GAS_WEB_APP_URL, params={'type': 'collabo_history'}, data=csv_data.encode('utf-8'))
-            print(f"[{datetime.now()}] Collabo Portal History: Success ({added_rows} rows)")
-            return {"status": f"Collabo Success ({added_rows} rows)", "delivery_items": collabo_delivery_items}
+            def clean_status(st):
+                st = st.replace("ﾒｰｶｰ入荷未定 注文取消時 要連絡", "")
+                st = st.replace("メーカー入荷未定 注文取消時 要連絡", "")
+                st = st.replace("限定出荷品 (出荷調整品)", "出荷調整")
+                st = st.replace("限定出荷品(出荷調整品)", "出荷調整")
+                st = st.replace("メーカー出荷調整品：入荷未定", "出荷調整")
+                st = st.replace("出荷停止・入荷未定", "出荷停止")
+                st = st.replace("出荷一時停止・入荷未定", "出荷停止")
+                st = " ".join(st.split())
+                if not st: return "未定"
+                return st
+
+            def get_sort_key(date_str):
+                if not date_str: return "0000/00/00 00:00"
+                try:
+                    mm = int(date_str.split('/')[0])
+                    cur_mm = datetime.now().month
+                    year = datetime.now().year
+                    if mm > cur_mm + 1:
+                        year -= 1
+                    return f"{year}/{date_str}"
+                except:
+                    return f"9999/{date_str}"
+
+            def add_if_pending(date_str, name, supplier, stat, qty):
+                if '調達' in stat or '未定' in stat:
+                    clean_st = clean_status(stat)
+                    sort_key = get_sort_key(date_str)
+                    missing_items.append((sort_key, [date_str, name, supplier, clean_st, qty]))
+
+            # extract Medipal missing
+            for item in data.get('medipal', []):
+                add_if_pending(item.get('date', ''), item.get('name', ''), "Medipal", item.get('remarks', ''), item.get('order_qty', ''))
+                
+            # extract Collabo missing
+            for item in data.get('collabo', []):
+                status_remarks = f"{item.get('status','')} {item.get('remarks','')}".strip()
+                add_if_pending(item.get('date', ''), item.get('name', ''), "Collabo", status_remarks, item.get('order_qty', ''))
+                
+            # extract Alf missing
+            for item in data.get('alfweb', []):
+                add_if_pending(item.get('date', ''), item.get('name', ''), "Alf", item.get('status', ''), item.get('order_qty', ''))
+
+            if missing_items:
+                missing_items.sort(key=lambda x: x[0], reverse=True)
+                csv_lines = ["日付,品名,卸名,ステータス,数量"]
+                for _, mi in missing_items:
+                    csv_lines.append(",".join(str(m).replace(',', '') for m in mi))
+                csv_data = "\n".join(csv_lines)
+                requests.post(GAS_WEB_APP_URL, params={'type': 'pending_deliveries'}, data=csv_data.encode('utf-8'))
+                print(f"[{datetime.now()}] Pharma Dashboard 取得・送信完了 ({len(missing_items)}件)")
+            else:
+                print(f"[{datetime.now()}] Pharma Dashboard: 未納データは0件でした。")
+            return "Pharma Dashboard Success"
         else:
-            print(f"[{datetime.now()}] [WARNING] Collabo Portal 履歴テーブルデータが空か見つかりませんでした。")
-            return {"status": "Collabo Success (0 rows)", "delivery_items": collabo_delivery_items}
-            
+            print(f"[{datetime.now()}] [WARNING] Pharma Dashboard API HTTP={res.status_code}")
+            return "Pharma Dashboard Error"
     except Exception as e:
-        err_msg = f"Collabo Portal Error: {e}"
-        print(f"[{datetime.now()}] [WARNING] {err_msg}")
-        raise RuntimeError(err_msg)
-    finally:
-        if browser_context:
-            await browser_context.close()
+        print(f"[{datetime.now()}] [WARNING] Pharma Dashboard 取得エラー: {e}")
+        return "Pharma Dashboard Error"
+
+async def extract_mhlw_supply_status():
+    print(f"[{datetime.now()}] 厚労省 医薬品安定供給状況APIからのデータ取得を開始します...")
+    try:
+        url = "https://iyakuhin-kyokyu.mhlw.go.jp/api/info-site/supply-status-report"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        
+        loop = asyncio.get_event_loop()
+        res = await loop.run_in_executor(None, lambda: requests.get(url, headers=headers))
+        
+        if res.status_code == 200:
+            resp_json = res.json()
+            data = resp_json.get("data", [])
+            payload_data = []
+            for row in data:
+                payload_data.append({
+                    "name": row.get("product_nm", ""),
+                    "status": row.get("shipment_volume_current_status_nm", ""),
+                    "yjCode": row.get("yj_cd", "")
+                })
+            
+            payload = {
+                "action": "mhlw_sync",
+                "data": payload_data
+            }
+            
+            post_res = await loop.run_in_executor(None, lambda: requests.post(GAS_WEB_APP_URL, json=payload))
+            if post_res.status_code == 200:
+                 print(f"[{datetime.now()}] 厚労省データのGAS送信完了 ({len(payload_data)}件)")
+                 return "MHLW Supply Success"
+            else:
+                 print(f"[{datetime.now()}] [WARNING] 厚労省データのGAS送信失敗 HTTP={post_res.status_code}")
+                 return "MHLW Supply Send Error"
+        else:
+             print(f"[{datetime.now()}] [WARNING] 厚労省API取得失敗 HTTP={res.status_code}")
+             return "MHLW Supply Fetch Error"
+    except Exception as e:
+        print(f"[{datetime.now()}] [WARNING] 厚労省APIエラー: {e}")
+        return "MHLW Supply Error"
+
 
 async def run_extraction():
     print(f"[{datetime.now()}] Looker Studio & MedOrder データ抽出を開始します... (GitHub Actions Cloud Mode)")
@@ -844,12 +937,14 @@ async def run_extraction():
             args=['--start-maximized', '--disable-blink-features=AutomationControlled']
         )
 
-        # 4つのPhaseを非同期で同時に走らせる
+        # 5つのPhaseを非同期で同時に走らせる
         results = await asyncio.gather(
-            extract_looker_studio(browser, state_path),
+            extract_looker_studio(p, browser, state_path),
             extract_medorder(browser),
             extract_orderepi(browser),
-            extract_collabo(browser),
+            extract_pharma_dashboard(),
+            extract_mhlw_supply_status(),
+            
             return_exceptions=True
         )
 
@@ -861,37 +956,38 @@ async def run_extraction():
             if isinstance(res, Exception):
                 failures.append(str(res))
         
-        # ── 納品履歴の統合送信 ──
-        # Phase 3 (OrderEPI/Medipal) と Phase 4 (Collabo) の納品予定データを統合
-        try:
-            receive_csv_lines = ["納品日,商品名,取引先"]
-            
-            # Medipal 配送予定データ (results[2] = extract_orderepi)
-            epi_result = results[2]
-            if isinstance(epi_result, dict) and epi_result.get("delivery_map"):
-                for name, date in epi_result["delivery_map"].items():
-                    name_clean = name.replace(',', '').strip()
-                    date_clean = date.replace(',', '').strip()
-                    receive_csv_lines.append(f"{date_clean},{name_clean},メディセオ")
-            
-            # Collabo 納品予定データ (results[3] = extract_collabo)
-            collabo_result = results[3]
-            if isinstance(collabo_result, dict) and collabo_result.get("delivery_items"):
-                for item in collabo_result["delivery_items"]:
-                    name_clean = item["name"].replace(',', '').strip()
-                    date_clean = item["date"].replace(',', '').strip()
-                    source = item.get("source", "スズケン")
-                    receive_csv_lines.append(f"{date_clean},{name_clean},{source}")
-            
-            if len(receive_csv_lines) > 1:
-                receive_csv = "\n".join(receive_csv_lines)
-                resp = requests.post(GAS_WEB_APP_URL, params={'type': 'receive_history'}, data=receive_csv.encode('utf-8'))
-                print(f"[{datetime.now()}] 納品履歴統合送信: {len(receive_csv_lines) - 1} 件 (status={resp.status_code})")
-            else:
-                print(f"[{datetime.now()}] [WARNING] 納品履歴データが0件のため送信スキップ")
-        except Exception as e_recv:
-            print(f"[{datetime.now()}] [WARNING] 納品履歴統合送信エラー: {e_recv}")
         
+        # ── 発注履歴と納品履歴の統合送信 ──
+        try:
+            m_res = results[1] # MedOrder
+            e_res = results[2] # OrderEPI
+            
+            # Combine Orders
+            history_rows = []
+            if isinstance(m_res, dict) and "orders" in m_res:
+                history_rows.extend(m_res["orders"])
+            if isinstance(e_res, dict) and "orders" in e_res:
+                history_rows.extend(e_res["orders"])
+                
+            if history_rows:
+                csv_data = "発注日,状態,メーカー,品名,規格,単位,数量,発注先,納品予定\n" + "\n".join(history_rows)
+                requests.post(GAS_WEB_APP_URL, params={'type': 'history'}, data=csv_data.encode('utf-8'))
+                print(f"[{datetime.now()}] 発注履歴統合送信: {len(history_rows)} 件")
+
+            # Combine Deliveries
+            receive_rows = []
+            if isinstance(m_res, dict) and "deliveries" in m_res:
+                receive_rows.extend(m_res["deliveries"])
+                
+            if receive_rows:
+                # GAS expects Date, Name, Supplier, Qty for processIncomingDeliveries (index finding)
+                csv_data = "納品日,薬品名,取引先,数量\n" + "\n".join(receive_rows)
+                requests.post(GAS_WEB_APP_URL, params={'type': 'receive_history'}, data=csv_data.encode('utf-8'))
+                print(f"[{datetime.now()}] 納品実績(MedOrder)送信: {len(receive_rows)} 件")
+
+        except Exception as e_comb:
+            print(f"[{datetime.now()}] [WARNING] 統合送信エラー: {e_comb}")
+            
         if len(failures) > 0:
             error_details = ' | '.join(failures)
             raise RuntimeError(f"一部のフェーズが失敗しました: {error_details}")
