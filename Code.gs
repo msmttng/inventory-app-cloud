@@ -97,6 +97,15 @@ function doPost(e) {
         return ContentService.createTextOutput(JSON.stringify(results))
           .setMimeType(ContentService.MimeType.JSON);
       }
+      if (action === 'get_mhlw_yj_map') {
+        const mhlwResult = getMhlwSupplyMap_();
+        const minifiedMap = {};
+        for(const r of mhlwResult.rows) {
+           if(r.yjPrefix) minifiedMap[r.name] = r.yjPrefix;
+        }
+        return ContentService.createTextOutput(JSON.stringify(minifiedMap))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
       if (action === 'history') {
         const results = getOrderHistory();
         return ContentService.createTextOutput(JSON.stringify(results))
@@ -582,13 +591,14 @@ function processNsipsSync(mode, items) {
   const invData = inventorySheet.getDataRange().getValues();
   const headers = invData[0];
   
-  let yjColIdx = -1, nameColIdx = -1, stockColIdx = -1, thresholdColIdx = -1;
+  let yjColIdx = -1, nameColIdx = -1, stockColIdx = -1, thresholdColIdx = -1, capacityColIdx = -1;
   for (let i = 0; i < headers.length; i++) {
     const header = String(headers[i]).replace(/\uFEFF/g, '').replace(/[\s\u3000]/g, '');
     if (header.toUpperCase().includes('YJ')) yjColIdx = i;
     if (header.includes('薬品') || header.includes('品名')) nameColIdx = i;
     if (header === '在庫数' || header.includes('在庫数')) stockColIdx = i;
     if (header.includes('発注点') || header.includes('しきい値')) thresholdColIdx = i;
+    if (header.includes('入り目') || header.includes('包装単位') || header.includes('規格容量') || header.includes('換算')) capacityColIdx = i;
   }
 
   if (yjColIdx === -1 || stockColIdx === -1) {
@@ -607,14 +617,23 @@ function processNsipsSync(mode, items) {
 
     for (let i = 1; i < invData.length; i++) {
       const rowYj = String(invData[i][yjColIdx] || '').trim();
-      // フルYJコード、またはYJの前9桁が一致するかで判定
-      if (rowYj && (rowYj === targetYj || rowYj.includes(targetYj) || targetYj.includes(rowYj.substring(0,9)))) {
+      // フルYJコード完全一致のみで判定（先発・後発の誤マッチ防止のため前9桁による部分一致を廃止）
+      if (rowYj && rowYj === targetYj) {
         let currentStock = parseFloat(invData[i][stockColIdx]) || 0;
         let newStock = currentStock;
         const productName = invData[i][nameColIdx];
 
+        // 容量(入り目)が設定されている場合は、届いた総量(mL/g)を入り目で割って「本数」に換算
+        let adjustedQty = qty;
+        if (capacityColIdx !== -1) {
+             let cap = parseFloat(invData[i][capacityColIdx]);
+             if (!isNaN(cap) && cap > 0) {
+                 adjustedQty = qty / cap;
+             }
+        }
+
         if (mode === 'dispense') {
-          newStock = currentStock - qty;
+          newStock = Math.round((currentStock - adjustedQty) * 1000) / 1000;
           let threshold = 0;
           if (thresholdColIdx !== -1) {
               threshold = parseFloat(invData[i][thresholdColIdx]) || 0;
@@ -624,7 +643,7 @@ function processNsipsSync(mode, items) {
               autoOrderItems.push({ name: productName, yj: targetYj, qty: 1 });
           }
         } else if (mode === 'cancel') {
-          newStock = currentStock + qty;
+          newStock = Math.round((currentStock + adjustedQty) * 1000) / 1000;
           cancelOrderNames.push(productName);
         }
 
@@ -790,18 +809,29 @@ function getReceiveHistoryData() {
 }
 
 function getMhlwSupplyMap_() {
-  const mhlwMap = {};
+  const mhlwData = {
+    nameToStatus: {},
+    rows: []
+  };
   try {
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_MHLW_SUPPLY);
-    if (!sheet) return mhlwMap;
+    if (!sheet) return mhlwData;
     const data = sheet.getDataRange().getValues();
     for (let i = 1; i < data.length; i++) {
         const medName = String(data[i][0] || '').trim();
         const status = String(data[i][1] || '').trim();
-        if (medName) mhlwMap[normalizeText(medName)] = status;
+        const yjCode = String(data[i][2] || '').trim();
+        if (medName) {
+            const normalized = normalizeText(medName);
+            mhlwData.nameToStatus[normalized] = status;
+            mhlwData.rows.push({
+               name: normalized,
+               yjPrefix: yjCode.length >= 9 ? yjCode.substring(0, 9) : null
+            });
+        }
     }
   } catch(e) {}
-  return mhlwMap;
+  return mhlwData;
 }
 
 function searchMedicine(query) {
@@ -829,11 +859,23 @@ function searchMedicine(query) {
     throw new Error('Error: 「薬品名」の列が見つかりません。現在の1行目: ' + JSON.stringify(headers));
   }
 
-  const mhlwMap = getMhlwSupplyMap_();
+  const mhlwResult = getMhlwSupplyMap_();
+  const mhlwMap = mhlwResult.nameToStatus;
   const keywords = query.trim().split(/[\s\u3000]+/).filter(k => k).map(normalizeText);
   const primaryResults = [];
   const primaryYjPrefixes = new Set();
   const primaryRowIndices = new Set();
+
+  // ★新機能: MHLWマスターから「検索キーワード」に完全合致する一般名等を検索し、そのYJ接頭辞を収集する
+  // これにより、もし自分の薬局の在庫に「ビホナゾール」が含まれていなくても、
+  // ビホナゾール成分を持つ在庫品（マイコスポール等）をalternativeResultsで表示できる。
+  for (const row of mhlwResult.rows) {
+      if (keywords.every(kw => row.name.includes(kw))) {
+          if (row.yjPrefix) {
+              primaryYjPrefixes.add(row.yjPrefix);
+          }
+      }
+  }
   
   // 納品予定データの取得 (UI表示用)
   const receiveMap = {};
@@ -962,7 +1004,7 @@ function getShelfSummary() {
   const headers = data[0];
 
   let nameColIdx = -1, stockColIdx = -1, shelfColIdx = -1;
-  let unitColIdx = -1, usageColIdx = -1, oldestStockColIdx = -1;
+  let unitColIdx = -1, usageColIdx = -1, oldestStockColIdx = -1, yjColIdx = -1;
 
   for (let i = 0; i < headers.length; i++) {
     const header = String(headers[i]).replace(/\uFEFF/g, '').replace(/[\s\u3000]/g, '');
@@ -972,6 +1014,7 @@ function getShelfSummary() {
     if (header === '単位' || header.includes('単位')) unitColIdx = i;
     if (header === '用法区分' || header.includes('用法')) usageColIdx = i;
     if (header.includes('推定最古') || header.includes('最古在庫')) oldestStockColIdx = i;
+    if (header.toUpperCase().includes('YJ')) yjColIdx = i;
   }
 
   if (nameColIdx === -1) {
@@ -989,8 +1032,9 @@ function getShelfSummary() {
     const unit = unitColIdx !== -1 ? String(row[unitColIdx] || '').trim() : '';
     const usage = usageColIdx !== -1 ? String(row[usageColIdx] || '').trim() : '';
     const oldestStock = oldestStockColIdx !== -1 ? String(row[oldestStockColIdx] || '').trim() : '';
+    const yjCode = yjColIdx !== -1 ? String(row[yjColIdx] || '').trim() : '';
     if (!shelfMap[shelfKey]) shelfMap[shelfKey] = { shelf: shelfKey, items: [] };
-    shelfMap[shelfKey].items.push({ name: medicineName, stock, unit, usage, oldestStock });
+    shelfMap[shelfKey].items.push({ name: medicineName, stock, unit, usage, oldestStock, yjCode });
   }
 
   return Object.values(shelfMap);
@@ -1135,7 +1179,10 @@ function getPotentialDeadStock() {
 
 function normalizeText(text) {
   if (!text) return '';
-  let normalized = String(text).normalize('NFKC').toLowerCase();
+  // 【自動除外ルール】 （ または ( が出現したら、それ以降の文字列をすべて切り捨てる
+  let t = String(text);
+  t = t.split('（')[0].split('(')[0];
+  let normalized = t.normalize('NFKC').toLowerCase();
   normalized = normalized.replace(/[-－‑—–ｰ]/g, 'ー');
   return normalized.replace(/[\u30a1-\u30f6]/g, function(match) {
     return String.fromCharCode(match.charCodeAt(0) - 0x60);
