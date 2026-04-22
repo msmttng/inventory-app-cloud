@@ -1184,6 +1184,12 @@ function normalizeText(text) {
   t = t.split('（')[0].split('(')[0];
   let normalized = t.normalize('NFKC').toLowerCase();
   normalized = normalized.replace(/[-－‑—–ｰ]/g, 'ー');
+  
+  // 英語の略称を日本語（ひらがな）に変換して表記揺れを吸収
+  normalized = normalized.replace(/cap/g, 'かぷせる');
+  normalized = normalized.replace(/tab/g, 'じょう');
+  normalized = normalized.replace(/syr/g, 'しろっぷ');
+  
   return normalized.replace(/[\u30a1-\u30f6]/g, function(match) {
     return String.fromCharCode(match.charCodeAt(0) - 0x60);
   });
