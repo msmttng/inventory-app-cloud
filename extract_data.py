@@ -1,22 +1,31 @@
 import asyncio
 import os
 import sys
+import io
+
+# WindowsコンソールでのUnicodeEncodeError (cp932) を回避しつつ、リアルタイム出力を維持
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
+
 import requests  # type: ignore
 import json
 import base64
 from datetime import datetime, timedelta
 from playwright.async_api import async_playwright  # type: ignore
 
-# Load .env manually if it exists
-if os.path.exists(".env"):
-    with open(".env", "r", encoding="utf-8") as f:
+# Load .env manually if it exists (スクリプトの絶対パスを基準に読み込む)
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_ENV_PATH = os.path.join(_SCRIPT_DIR, ".env")
+if os.path.exists(_ENV_PATH):
+    with open(_ENV_PATH, "r", encoding="utf-8") as f:
         for line in f:
             if line.strip() and not line.startswith("#") and "=" in line:
                 key, value = line.strip().split("=", 1)
                 os.environ[key] = value
 
 # 設定
-GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxRmB7n67cNfGBfQaXXLwK3_QXIupiF-90c6AZsWa4IhaPspf4DkvXw-mTS2kVb1AL_jw/exec"
+GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwDhj91LpWaF6OWhTmr6hbYLgScu0tlBcs2Y4nyXvg2WAwybHYGd5-V579tf0I5_H2dCQ/exec"
 LOOKER_STUDIO_URL = "https://lookerstudio.google.com/reporting/fd3dd8c8-38ab-4cc0-bad4-c23552bb7209/page/p_9rj9sjgqvc?pli=1"
 DOWNLOAD_DIR = "/tmp/downloads" if os.name != 'nt' else os.environ.get('TEMP', '.')
 
@@ -62,10 +71,11 @@ async def extract_looker_studio(p, browser, state_path):
             browser_context = await p.chromium.launch_persistent_context(
                 user_data_dir=user_data_path,
                 channel="chrome",
-                headless=True, # バックグラウンドで実行するように変更
+                headless=True,
                 no_viewport=True,
                 args=['--start-maximized', '--disable-blink-features=AutomationControlled']
             )
+            # launch_persistent_context は初期状態で1つページが開いている
             if len(browser_context.pages) > 0:
                 page = browser_context.pages[0]
             else:
@@ -81,19 +91,19 @@ async def extract_looker_studio(p, browser, state_path):
                 print(f"[{datetime.now()}] Googleアカウント選択ページを検出: {current_url[:80]}")
                 # state.json 失効を通知
                 send_log("⚠️ Google認証(state.json)が失効しています。generate_state.py で再生成してください。")
-                # 最初のアカウント行をクリック（Signed out でもクリックして進む）
+                
+                print(f"[{datetime.now()}] 認証切れのため、ポップアップ警告とメール通知を行います")
                 try:
-                    account_btn = page.locator("li[aria-label], [data-email], .account-name").first
-                    if await account_btn.count() > 0:
-                        await account_btn.click(timeout=5000)
-                    else:
-                        # テキストで探す
-                        await page.locator("text=masamitting@gmail.com").first.click(timeout=5000)
-                    await asyncio.sleep(3)
-                    print(f"[{datetime.now()}] アカウントクリック後URL: {page.url[:80]}")
-                except Exception as acc_err:
-                    print(f"[{datetime.now()}] [WARNING] アカウント選択クリック失敗: {acc_err}")
-                    break
+                    alert_payload = {"action": "send_alert", "subject": "LookerStudio認証切れ", "message": "Looker Studioのログイン有効期限が切れました。\n\n至急、薬局のPCで generate_state.py を実行して再認証を完了させてください。\n※他の同期（納品履歴や処方キャンセル等）は裏側で継続して実行されています。"}
+                    requests.post(GAS_WEB_APP_URL, json=alert_payload, timeout=10)
+                except Exception as e:
+                    print(f"[{datetime.now()}] アラートメール送信失敗: {e}")
+                
+                import subprocess
+                cmd_script = "import ctypes, subprocess; msg='Looker Studioのログイン有効期限が切れています。\\n\\n今すぐ自動で generate_state.py を起動してGoogle認証を復活させますか？\\n(認証完了後、自動で取得処理を再開します)\\n\\n※アラートメールも送信済です'; res=ctypes.windll.user32.MessageBoxW(0, msg, '【在庫アプリシステム】警告', 52); subprocess.Popen('start cmd.exe /c \"python generate_state.py && run_extract.bat\"', shell=True) if res == 6 else None"
+                subprocess.Popen(['python', '-c', cmd_script])
+                return
+                
             elif "reporting" in current_url:
                 print(f"[{datetime.now()}] Looker Studio レポートページに到達: {current_url[:80]}")
                 break
@@ -107,7 +117,25 @@ async def extract_looker_studio(p, browser, state_path):
             print(f"[{datetime.now()}] [WARNING] /reporting/ への到達タイムアウト。現在のURL: {page.url[:100]}")
             raise
         await page.wait_for_load_state("domcontentloaded", timeout=60000)
-        await asyncio.sleep(10)  # Looker Studio のチャート描画完了を待つ
+        await asyncio.sleep(5)
+        # キャッシュされた古いデータを避けるため、強制データ更新を試行
+        # 方法1: Looker Studio 公式ショートカット (Ctrl+Shift+E)
+        try:
+            await page.keyboard.press("Control+Shift+E")
+            print(f"[{datetime.now()}] Looker Studio データを強制更新 (Ctrl+Shift+E)")
+            # 「データが更新されました」トーストが出るまで最大5秒待つ
+            try:
+                await page.locator("text=/更新|updated|refreshed/i").first.wait_for(state="visible", timeout=5000)
+                print(f"[{datetime.now()}] データ更新のトースト確認")
+            except Exception:
+                pass
+        except Exception as e_refresh:
+            print(f"[{datetime.now()}] Ctrl+Shift+E 失敗: {e_refresh}")
+            # 方法2: フォールバックとしてページ全体をリロード
+            print(f"[{datetime.now()}] フォールバック: page.reload() を実行")
+            await page.reload(wait_until="domcontentloaded")
+            await page.wait_for_url("**/reporting/**", timeout=60000)
+        await asyncio.sleep(10)  # Looker Studio のチャート再描画完了を待つ
         
         # ── CSVクリック共通ヘルパー ──
         async def click_csv_option(pg):
@@ -229,6 +257,222 @@ async def extract_looker_studio(p, browser, state_path):
             except Exception:
                 print(f"[{datetime.now()}] [WARNING] CSV選択不可 — デフォルト形式でエクスポートを続行")
 
+        async def export_table_to_csv(title_text, export_type):
+            """セクションタイトル直下にある最初のtdセルを右クリックしてCSVエクスポート"""
+            title_el = page.locator(f"text='{title_text}'").first
+            await title_el.wait_for(state="visible", timeout=60000)
+            # 確実に対象のテーブルが見える位置まで画面をスクロールする（下部にあるテーブル対策）
+            try:
+                await title_el.scroll_into_view_if_needed()
+                await page.mouse.wheel(0, 100) # 少し余分に下にスクロールしてヘッダーを確実に見えやすくする
+                await asyncio.sleep(1)
+            except Exception:
+                pass
+                
+            await asyncio.sleep(2)
+            title_box = await title_el.bounding_box()
+            if not title_box:
+                raise RuntimeError(f"'{title_text}' bounding_box が取得できません")
+
+            # ─────────────────────────────────────────────────────────────
+            # チャートメニューボタン (グラフのメニュー表示) を直接クリック
+            # 診断により button.mdc-icon-button[aria-label] がホバー不要で
+            # 最初からDOMに存在することを確認済み
+            # ─────────────────────────────────────────────────────────────
+            debug_dir = os.path.dirname(os.path.abspath(__file__))
+            menu_opened = False
+
+            # ── 方法1: title付近の最も右にある mdc-icon-button をクリック ──
+            # (診断:y≈345のボタン2個: 左がフィルタ、右がチャートメニュー)
+            chart_menu_btn = None
+            best_x = -1
+            icon_btns = await page.locator("button.mdc-icon-button[aria-label]").all()
+            for btn in icon_btns:
+                try:
+                    if await btn.is_visible():
+                        box = await btn.bounding_box()
+                        if box and abs(box['y'] - title_box['y']) < 120 and box['x'] > best_x:
+                            chart_menu_btn = btn
+                            best_x = box['x']
+                except Exception:
+                    continue
+
+            if chart_menu_btn:
+                lbl = await chart_menu_btn.get_attribute("aria-label")
+                print(f"[{datetime.now()}] チャートメニューボタン発見: aria='{lbl}' x={best_x:.0f}")
+                await chart_menu_btn.click()
+                await asyncio.sleep(1)
+                if await page.locator("text=/エクスポート/").count() > 0:
+                    menu_opened = True
+                    print(f"[{datetime.now()}] チャートメニュー経由でエクスポートメニュー出現確認")
+                else:
+                    # グラフのメニュー表示 にはサブメニューがある場合あり → hover 後クリック
+                    print(f"[{datetime.now()}] エクスポートメニュー未出現 → ホバー後再クリック")
+                    await chart_menu_btn.hover()
+                    await asyncio.sleep(0.5)
+                    await chart_menu_btn.click()
+                    await asyncio.sleep(1)
+                    if await page.locator("text=/エクスポート/").count() > 0:
+                        menu_opened = True
+                        print(f"[{datetime.now()}] ホバー後クリックでエクスポートメニュー出現確認")
+
+            # ── 方法2: title_el.hover() → JS で shadowDOM を精査 ──
+            if not menu_opened:
+                await title_el.hover()
+                await asyncio.sleep(1.5)
+                js_result = await page.evaluate(f"""
+                    () => {{
+                        const titleText = '{title_text}';
+                        function walkShadow(root, res) {{
+                            for (const el of root.querySelectorAll('button[aria-label]')) {{
+                                const r = el.getBoundingClientRect();
+                                if (r.width > 0 && r.height > 0) res.push(el);
+                                if (el.shadowRoot) walkShadow(el.shadowRoot, res);
+                            }}
+                        }}
+                        const titleEl = Array.from(document.querySelectorAll('*')).find(
+                            el => el.textContent?.trim() === titleText && el.childElementCount === 0
+                        );
+                        const titleRect = titleEl ? titleEl.getBoundingClientRect() : null;
+                        const all = [];
+                        walkShadow(document.body, all);
+                        const nearby = all.filter(b => {{
+                            const r = b.getBoundingClientRect();
+                            return titleRect ? Math.abs(r.y - titleRect.y) < 120 : true;
+                        }}).sort((a, b) => b.getBoundingClientRect().x - a.getBoundingClientRect().x);
+                        if (nearby.length > 0) {{
+                            nearby[0].click();
+                            return 'js_clicked:' + nearby[0].getAttribute('aria-label');
+                        }}
+                        return 'not_found';
+                    }}
+                """)
+                print(f"[{datetime.now()}] JS shadowDOM クリック結果: {js_result}")
+                if js_result and js_result != 'not_found':
+                    await asyncio.sleep(1)
+                    if await page.locator("text=/エクスポート/").count() > 0:
+                        menu_opened = True
+                        print(f"[{datetime.now()}] JS経由でエクスポートメニュー出現確認")
+
+            # ── 方法3: 右クリック (role="cell" → 固定オフセット) ──
+            if not menu_opened:
+                try:
+                    await page.screenshot(path=os.path.join(debug_dir, f"looker_before_rightclick_{title_text}.png"))
+                except Exception:
+                    pass
+                cell_target = None
+                for sel in ["[role='cell']", "[role='gridcell']", "td"]:
+                    cells = await page.locator(sel).all()
+                    for cell in cells:
+                        try:
+                            if await cell.is_visible():
+                                box = await cell.bounding_box()
+                                if box and box['y'] > title_box['y'] + 20:
+                                    cell_target = cell
+                                    print(f"[{datetime.now()}] テーブルセル発見({sel}): y={box['y']:.0f}")
+                                    break
+                        except Exception:
+                            continue
+                    if cell_target:
+                        break
+                if cell_target:
+                    await cell_target.hover()
+                    await asyncio.sleep(0.5)
+                    await cell_target.click(button="right")
+                else:
+                    click_x = title_box['x'] + 100
+                    click_y = title_box['y'] + 200
+                    await page.mouse.move(click_x, click_y)
+                    await asyncio.sleep(0.5)
+                    await page.mouse.click(click_x, click_y, button="right")
+                await asyncio.sleep(2)
+                try:
+                    await page.screenshot(path=os.path.join(debug_dir, f"looker_rightclick_{title_text}.png"))
+                except Exception:
+                    pass
+                if await page.locator("text=/エクスポート/").count() > 0:
+                    menu_opened = True
+                    print(f"[{datetime.now()}] 右クリック経由でエクスポートメニュー出現確認")
+
+            if not menu_opened:
+                try:
+                    await page.screenshot(path=os.path.join(debug_dir, f"looker_error_{title_text}.png"), full_page=True)
+                except Exception:
+                    pass
+                await page.keyboard.press("Escape")
+                raise RuntimeError(f"'{title_text}': エクスポートメニューが表示されませんでした (すべての探索手法が失敗)")
+
+            # ── STEP A: 「グラフをエクスポート」→サブメニューを展開 ──
+            export_level1_candidates = [
+                "text=/グラフをエクスポート/",
+                "text=/エクスポート/",
+                "text=/Export/",
+            ]
+            level1_clicked = False
+            for sel in export_level1_candidates:
+                try:
+                    locs = await page.locator(sel).all()
+                    for loc in locs:
+                        if await loc.is_visible():
+                            await loc.hover()
+                            await asyncio.sleep(0.5)
+                            await loc.click(timeout=10000)
+                            level1_clicked = True
+                            print(f"[{datetime.now()}] エクスポートメニュー1段目クリック成功: {sel}")
+                            break
+                    if level1_clicked:
+                        break
+                except Exception:
+                    continue
+
+            if not level1_clicked:
+                print(f"[{datetime.now()}] [WARNING] STEP A: 1段目メニューなし → 直接STEP Bへ")
+
+            # ── STEP B: 「データのエクスポート」が出現するまで待機してクリック ──
+            data_export_candidates = [
+                "text=/データのエクスポート/",
+                "text=/データを書き出す/",
+                "text=/Export data/",
+                "text=/CSV/",
+            ]
+            data_export_clicked = False
+            for sel in data_export_candidates:
+                loc = page.locator(sel).first
+                try:
+                    await loc.wait_for(state="visible", timeout=10000)
+                    await loc.click(timeout=10000)
+                    data_export_clicked = True
+                    print(f"[{datetime.now()}] エクスポートサブメニュークリック成功: {sel}")
+                    break
+                except Exception:
+                    continue
+            if not data_export_clicked:
+                try:
+                    await page.screenshot(path=os.path.join(debug_dir, f"looker_stepB_error_{title_text}.png"))
+                except Exception:
+                    pass
+                raise RuntimeError(f"'{title_text}': 「データのエクスポート」サブメニューが見つかりませんでした（すべての候補が失敗）")
+            await click_csv_option(page)
+            date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            async with page.expect_download() as dl_info:
+                await page.locator("role=button[name='エクスポート']").click()
+            dl = await dl_info.value
+            f_path = os.path.join(DOWNLOAD_DIR, f"{export_type}_export_{date_str}.csv")
+            await dl.save_as(f_path)
+            with open(f_path, 'r', encoding='utf-8') as f:
+                resp = requests.post(GAS_WEB_APP_URL, params={'type': export_type}, data=f.read().encode('utf-8'), timeout=60)
+                try:
+                    resp_json = resp.json()
+                    if resp_json.get('status') != 'success':
+                        err_msg = f"GAS API Error [{export_type}]: {resp_json}"
+                        send_log(err_msg)
+                        raise RuntimeError(err_msg)
+                except ValueError:
+                    err_msg = f"GAS API Response Error [{export_type}]: HTTP {resp.status_code}"
+                    send_log(err_msg)
+                    raise RuntimeError(err_msg)
+            print(f"[{datetime.now()}] Looker Studio {title_text}: Success")
+
         # ── 在庫日次 (1日1回のみ実行する制限を追加) ──
         lock_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory_daily_lock.txt")
         today_str = datetime.now().strftime("%Y%m%d")
@@ -238,6 +482,9 @@ async def extract_looker_studio(p, browser, state_path):
             with open(lock_file, "r", encoding="utf-8") as lf:
                 if lf.read().strip() == today_str:
                     already_run_today = True
+                    
+        if "--force-looker" in sys.argv:
+            already_run_today = False
 
         if already_run_today:
             print(f"[{datetime.now()}] [INFO] 在庫日次データは本日すでに抽出・送信済みのためスキップします。")
@@ -245,32 +492,7 @@ async def extract_looker_studio(p, browser, state_path):
         else:
             try:
                 await page.locator("text='在庫 - 日次'").first.click(timeout=30000)
-                table_title = page.locator("text='品目別の在庫数'").first
-                await table_title.wait_for(state="visible", timeout=60000)
-                await asyncio.sleep(5)  # チャートデータ描画完了を待つ
-                
-                box = await table_title.bounding_box()
-                if box:
-                    # データエリア（タイトルの 50px 下）を右クリック（実績あり）
-                    await page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height'] + 50, button="right")
-                else:
-                    await table_title.click(button="right")
-                await asyncio.sleep(1)
-                
-                await page.locator("text=/グラフをエクスポート/").first.click(timeout=30000)
-                await asyncio.sleep(0.5)
-                await page.locator("text=/データのエクスポート/").first.click(timeout=30000)
-                await click_csv_option(page)
-                
-                async with page.expect_download() as download_info:
-                    await page.locator("role=button[name='エクスポート']").click()
-                download = await download_info.value
-                current_date = datetime.now().strftime("%Y%m%d_%H%M%S")
-                file_path = os.path.join(DOWNLOAD_DIR, f"inventory_export_{current_date}.csv")
-                await download.save_as(file_path)
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    requests.post(GAS_WEB_APP_URL, params={'type': 'inventory'}, data=f.read().encode('utf-8'))
-                print(f"[{datetime.now()}] Looker Studio Inventory: Success")
+                await export_table_to_csv('品目別の在庫数', 'inventory')
                 
                 # 成功時に本日の日付をロックファイルに書き込む
                 with open(lock_file, "w", encoding="utf-8") as lf:
@@ -287,69 +509,6 @@ async def extract_looker_studio(p, browser, state_path):
                     pass
                 # 在庫データは最重要 — 失敗を伝播してGitHub Actionsを失敗させる
                 raise RuntimeError(err) from e_inv
-
-        async def export_table_to_csv(title_text, export_type):
-            """セクションタイトル直下にある最初のtdセルを右クリックしてCSVエクスポート"""
-            title_el = page.locator(f"text='{title_text}'").first
-            await title_el.wait_for(state="visible", timeout=60000)
-            await asyncio.sleep(2)
-            title_box = await title_el.bounding_box()
-            if not title_box:
-                raise RuntimeError(f"'{title_text}' bounding_box が取得できません")
-
-            # タイトルより下にある最初の td を右クリックターゲットとする
-            all_tds = await page.locator("td").all()
-            target_box = None
-            for td in all_tds:
-                box = await td.bounding_box()
-                if box and box['y'] > title_box['y'] + title_box['height'] + 10:
-                    target_box = box
-                    break
-
-            if target_box:
-                cx = target_box['x'] + target_box['width'] / 2
-                cy = target_box['y'] + target_box['height'] / 2
-                print(f"[{datetime.now()}] 右クリック座標: ({cx:.0f}, {cy:.0f}) for '{title_text}'")
-                await page.mouse.click(cx, cy, button="right")
-            else:
-                # Looker Studio は div ベースのテーブル（td なし）
-                # 不動品ページはタイトル下にサマリーカードがあるため 200px 下が実際のテーブルデータエリア
-                print(f"[{datetime.now()}] td が見つからないためタイトルの 200px 下を右クリック")
-                await page.mouse.click(
-                    title_box['x'] + title_box['width'] / 2,
-                    title_box['y'] + title_box['height'] + 200,
-                    button="right"
-                )
-
-            await asyncio.sleep(1)
-            menu_count = await page.locator("text=/グラフをエクスポート/").count()
-            if menu_count == 0:
-                # y+200 でも試みる（不動品ページで実績あり）
-                print(f"[{datetime.now()}] '{title_text}': y+50/+200 共に失敗。y+200 で再試行...")
-                await page.mouse.click(
-                    title_box['x'] + title_box['width'] / 2,
-                    title_box['y'] + title_box['height'] + 200,
-                    button="right"
-                )
-                await asyncio.sleep(1)
-                menu_count2 = await page.locator("text=/グラフをエクスポート/").count()
-                if menu_count2 == 0:
-                    await page.keyboard.press("Escape")
-                    raise RuntimeError(f"'{title_text}': グラフをエクスポートメニューが表示されませんでした")
-
-            await page.locator("text=/グラフをエクスポート/").first.click(timeout=30000)
-            await asyncio.sleep(0.5)
-            await page.locator("text=/データのエクスポート/").first.click(timeout=30000)
-            await click_csv_option(page)
-            date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-            async with page.expect_download() as dl_info:
-                await page.locator("role=button[name='エクスポート']").click()
-            dl = await dl_info.value
-            f_path = os.path.join(DOWNLOAD_DIR, f"{export_type}_export_{date_str}.csv")
-            await dl.save_as(f_path)
-            with open(f_path, 'r', encoding='utf-8') as f:
-                requests.post(GAS_WEB_APP_URL, params={'type': export_type}, data=f.read().encode('utf-8'))
-            print(f"[{datetime.now()}] Looker Studio {title_text}: Success")
 
         # 不動品タブへ移動
         try:
@@ -378,56 +537,13 @@ async def extract_looker_studio(p, browser, state_path):
             print(f"[{datetime.now()}] [WARNING] 返品推奨品エクスポートをスキップ: {e_ret}")
 
         # ── 納品実績タブ（入庫 - 日次）──
-        try:
-            await page.keyboard.press("Escape")  # 念のためダイアログを閉じる
-        except Exception:
-            pass
-        try:
-            # 「入庫 - 日次」タブをクリック
-            await page.locator("text='入庫 - 日次'").first.click(timeout=30000)
-            await asyncio.sleep(15)  # チャート描画完了を待つ
-            
-            # テーブルタイトルを探す（品目別の入庫 or 類似のタイトル）
-            receive_title = None
-            for candidate in ['品目別の入庫数', '品目別の入庫', '入庫品目', '入庫一覧']:
-                try:
-                    loc = page.locator(f"text='{candidate}'").first
-                    await loc.wait_for(state="visible", timeout=10000)
-                    receive_title = candidate
-                    break
-                except Exception:
-                    continue
-            
-            if receive_title:
-                await asyncio.sleep(5)  # データ描画完了を待つ
-                await export_table_to_csv(receive_title, 'receive_history')
-                print(f"[{datetime.now()}] Looker Studio 納品実績: Success (title='{receive_title}')")
-            else:
-                # タイトルが見つからない場合、ページ上の最初のテーブルを右クリックして試行
-                print(f"[{datetime.now()}] [WARNING] 納品実績テーブルのタイトルが見つかりません。テーブル直接エクスポートを試みます。")
-                await asyncio.sleep(5)
-                # ページ中央付近のテーブル領域を右クリック
-                box = await page.locator("td, [role='cell'], .cell").first.bounding_box()
-                if box:
-                    await page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2, button="right")
-                    await asyncio.sleep(1)
-                    await page.locator("text=/グラフをエクスポート/").first.click(timeout=30000)
-                    await asyncio.sleep(0.5)
-                    await page.locator("text=/データのエクスポート/").first.click(timeout=30000)
-                    await click_csv_option(page)
-                    date_str_r = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    async with page.expect_download() as dl_info_r:
-                        await page.locator("role=button[name='エクスポート']").click()
-                    dl_r = await dl_info_r.value
-                    f_path_r = os.path.join(DOWNLOAD_DIR, f"receive_export_{date_str_r}.csv")
-                    await dl_r.save_as(f_path_r)
-                    with open(f_path_r, 'r', encoding='utf-8') as f:
-                        requests.post(GAS_WEB_APP_URL, params={'type': 'receive_history'}, data=f.read().encode('utf-8'))
-                    print(f"[{datetime.now()}] Looker Studio 納品実績(フォールバック): Success")
-                else:
-                    print(f"[{datetime.now()}] [WARNING] 納品実績テーブル要素が見つかりません")
-        except Exception as e_recv:
-            print(f"[{datetime.now()}] [WARNING] 納品実績エクスポートをスキップ: {e_recv}")
+        # [2026-04-22 無効化]
+        # 納品データは MedOrder API (Phase 2) から当日分を直接取得するため、
+        # Looker Studio の「入庫」タブからの receive_history 送信は冗長。
+        # Looker のデータは前日以前のデータのため、GAS側で当日分のみ在庫加算する
+        # ロジックにより実質スキップされていた上、納品履歴シートに前日分の不要な
+        # レコードが蓄積されていた。MedOrder API のみで納品管理を一元化する。
+        print(f"[{datetime.now()}] Looker Studio 入庫タブのエクスポートはスキップ (MedOrder APIを使用)")
 
         await page.close()
         return "Looker Studio Success"
@@ -552,20 +668,50 @@ async def extract_medorder(browser):
                 print(f"[{datetime.now()}] 薬品名マップ {len(item_name_map)}件 を送信中...")
                 requests.post(GAS_WEB_APP_URL, params={'type': 'medorder_names'}, data=json.dumps(item_name_map, ensure_ascii=False).encode('utf-8'))
             
-            # --- FETCH DELIVERIES VIA API ---
+            # --- FETCH DELIVERIES VIA API (全ページ取得) ---
             print(f"[{datetime.now()}] MedOrder納品履歴APIを取得中...")
             deliveries_csv = []
             try:
-                d_res = requests.get("https://medorder-api.pharmacloud.jp/api/v2/pharmacy/pharmacies/20/sdcvan_delivery_d_records?status=20&page=1", headers=headers, timeout=15)
-                if d_res.status_code == 200:
-                    d_data = d_res.json()
-                    for item in d_data:
-                        dn = item.get('name', '').replace(',', ' ').strip()
+                delivery_base = "https://medorder-api.pharmacloud.jp/api/v2/pharmacy/pharmacies/20/sdcvan_delivery_d_records?status=20&page="
+                d_all_data = []
+
+                # page=1 を取得してトータルページ数を確認
+                d_res1 = requests.get(delivery_base + "1", headers=headers, timeout=30)
+                print(f"[{datetime.now()}] 納品履歴API呼び出し: page=1")
+                if d_res1.status_code == 200:
+                    d_all_data.extend(d_res1.json())
+                    total_pages = int(d_res1.headers.get('X-Total-Pages') or d_res1.headers.get('x-total-pages') or 1)
+                    print(f"[{datetime.now()}] 納品履歴: 全 {total_pages} ページ検出")
+                    for pg in range(2, total_pages + 1):
+                        d_res_p = requests.get(delivery_base + str(pg), headers=headers, timeout=30)
+                        if d_res_p.status_code == 200:
+                            d_all_data.extend(d_res_p.json())
+                            print(f"[{datetime.now()}] 納品履歴 page={pg} 取得 ({len(d_res_p.json())}件)")
+                        await asyncio.sleep(0.3)
+
+                if d_all_data:
+                    # JANコードを一括収集してマスターAPI解決
+                    jan_codes = [str(item.get('item_code')) for item in d_all_data if item.get('item_code')]
+                    jan_map = {}
+                    if jan_codes:
+                        for i in range(0, len(jan_codes), 50):
+                            chunk = jan_codes[i:i+50]
+                            master_url = f"https://medorder-api.pharmacloud.jp/api/v2/master/stockable_items?jan_codes={','.join(chunk)}"
+                            res_m = requests.get(master_url, headers=headers, timeout=15)
+                            if res_m.status_code == 200:
+                                for mitem in res_m.json():
+                                    for oitem in mitem.get('orderable_items', []):
+                                        if oitem.get('jan_code'):
+                                            jan_map[str(oitem.get('jan_code'))] = mitem.get('name')
+
+                    for item in d_all_data:
+                        raw_name = item.get('name', '').replace(',', ' ').strip()
+                        jc = str(item.get('item_code', ''))
+                        dn = jan_map.get(jc, raw_name).replace(',', ' ').strip()
                         dd = item.get('slipped_on', '')
                         dq = item.get('quantity', '')
                         dealer_code = str(item.get('s_record', {}).get('dealer_code', ''))
-                        
-                        # medorder dealer codes to names (guessing based on typical codes)
+
                         dealer_name = 'MedOrder卸'
                         if dealer_code.startswith('9'):
                             if '156' in dealer_code: dealer_name = 'スズケン'
@@ -573,7 +719,7 @@ async def extract_medorder(browser):
                             elif '960' in dealer_code: dealer_name = 'アルフレッサ'
                             elif '261' in dealer_code: dealer_name = '東邦薬品'
                         deliveries_csv.append(f"{dd},{dn},{dealer_name},{dq}")
-                print(f"[{datetime.now()}] 納品履歴 {len(deliveries_csv)}件 取得完了")
+                print(f"[{datetime.now()}] 納品履歴 {len(deliveries_csv)}件 取得完了 (全ページ合計)")
             except Exception as de:
                 print(f"[{datetime.now()}] 納品履歴API取得エラー: {de}")
 
@@ -815,6 +961,9 @@ async def extract_pharma_dashboard():
                 st = st.replace("メーカー出荷調整品：入荷未定", "出荷調整")
                 st = st.replace("出荷停止・入荷未定", "出荷停止")
                 st = st.replace("出荷一時停止・入荷未定", "出荷停止")
+                # Collabo 受注辞退は「受注辞退」として統一表示
+                if "受注辞退" in st:
+                    return "受注辞退"
                 st = " ".join(st.split())
                 if not st: return "未定"
                 return st
@@ -832,19 +981,23 @@ async def extract_pharma_dashboard():
                     return f"9999/{date_str}"
 
             def add_if_pending(date_str, name, supplier, stat, qty):
-                if '調達' in stat or '未定' in stat:
+                PENDING_KEYWORDS = ('調達', '未定', '出荷調整', '出荷停止', '出荷準備中', '限定出荷', '受注辞退')
+                if any(kw in stat for kw in PENDING_KEYWORDS):
                     clean_st = clean_status(stat)
                     sort_key = get_sort_key(date_str)
                     missing_items.append((sort_key, [date_str, name, supplier, clean_st, qty]))
 
             # extract Medipal missing
             for item in data.get('medipal', []):
+                # date フィールドがあれば使用、なければ空文字
                 add_if_pending(item.get('date', ''), item.get('name', ''), "Medipal", item.get('remarks', ''), item.get('order_qty', ''))
                 
             # extract Collabo missing
             for item in data.get('collabo', []):
                 status_remarks = f"{item.get('status','')} {item.get('remarks','')}".strip()
-                add_if_pending(item.get('date', ''), item.get('name', ''), "Collabo", status_remarks, item.get('order_qty', ''))
+                # date が空なら deliv_date(納品予定日) をフォールバックに使う
+                date_val = item.get('date', '') or item.get('deliv_date', '')
+                add_if_pending(date_val, item.get('name', ''), "Collabo", status_remarks, item.get('order_qty', ''))
                 
             # extract Alf missing
             for item in data.get('alfweb', []):
@@ -856,7 +1009,17 @@ async def extract_pharma_dashboard():
                 for _, mi in missing_items:
                     csv_lines.append(",".join(str(m).replace(',', '') for m in mi))
                 csv_data = "\n".join(csv_lines)
-                requests.post(GAS_WEB_APP_URL, params={'type': 'pending_deliveries'}, data=csv_data.encode('utf-8'))
+                resp_pend = requests.post(GAS_WEB_APP_URL, params={'type': 'pending_deliveries'}, data=csv_data.encode('utf-8'), timeout=60)
+                try:
+                    resp_json = resp_pend.json()
+                    if resp_json.get('status') != 'success':
+                        err_msg = f"GAS API Error [pending_deliveries]: {resp_json}"
+                        send_log(err_msg)
+                        raise RuntimeError(err_msg)
+                except ValueError:
+                    err_msg = f"GAS API Response Error [pending_deliveries]: HTTP {resp_pend.status_code}"
+                    send_log(err_msg)
+                    raise RuntimeError(err_msg)
                 print(f"[{datetime.now()}] Pharma Dashboard 取得・送信完了 ({len(missing_items)}件)")
             else:
                 print(f"[{datetime.now()}] Pharma Dashboard: 未納データは0件でした。")
@@ -909,7 +1072,15 @@ async def extract_mhlw_supply_status():
 
 
 async def run_extraction():
-    print(f"[{datetime.now()}] Looker Studio & MedOrder データ抽出を開始します... (GitHub Actions Cloud Mode)")
+    import sys
+    mode = 'full'
+    if '--mode' in sys.argv:
+        try:
+            mode = sys.argv[sys.argv.index('--mode') + 1]
+        except IndexError:
+            pass
+
+    print(f"[{datetime.now()}] Looker Studio & MedOrder データ抽出を開始します... (Mode: {mode})")
     
     state_path = None
     b64_state = os.environ.get("GOOGLE_AUTH_STATE_BASE64")
@@ -937,14 +1108,47 @@ async def run_extraction():
             args=['--start-maximized', '--disable-blink-features=AutomationControlled']
         )
 
-        # 5つのPhaseを非同期で同時に走らせる
-        results = await asyncio.gather(
-            extract_looker_studio(p, browser, state_path),
-            extract_medorder(browser),
-            extract_orderepi(browser),
-            extract_pharma_dashboard(),
-            extract_mhlw_supply_status(),
+        async def dummy_task(name): return f"{name} Skipped"
+        
+        if mode == 'daily':
+            # 旧 extract_daily_inventory の代替 (Looker Studioのみ)
+            task_looker = extract_looker_studio(p, browser, state_path)
+            task_medorder = dummy_task("MedOrder")
+            task_orderepi = dummy_task("OrderEPI")
+            task_pharma = dummy_task("Pharma Dashboard")
+            task_mhlw = dummy_task("MHLW Supply Status")
             
+        elif mode == 'hourly':
+            # 旧 extract_daily の代替
+            current_hour = datetime.now().hour
+            force_looker = "--force-looker" in sys.argv
+            if 6 <= current_hour <= 9 or force_looker:
+                if force_looker:
+                    print(f"[{datetime.now()}] --force-looker 指定: 時間外でもLooker Studio を実行")
+                task_looker = extract_looker_studio(p, browser, state_path)
+            else:
+                print(f"[{datetime.now()}] Looker Studio スキップ (時刻: {current_hour}時。朝6時〜9時以外のため)")
+                task_looker = dummy_task("Looker Studio")
+            task_medorder = extract_medorder(browser)
+            task_orderepi = extract_orderepi(browser)
+            task_pharma = extract_pharma_dashboard()
+            task_mhlw = dummy_task("MHLW Supply Status")
+            
+        else: # full
+            # デフォルト：すべて実行
+            task_looker = extract_looker_studio(p, browser, state_path)
+            task_medorder = extract_medorder(browser)
+            task_orderepi = extract_orderepi(browser)
+            task_pharma = extract_pharma_dashboard()
+            task_mhlw = extract_mhlw_supply_status()
+
+        # Phase群を非同期で同時に走らせる
+        results = await asyncio.gather(
+            task_looker,
+            task_medorder,
+            task_orderepi,
+            task_pharma,
+            task_mhlw,
             return_exceptions=True
         )
 
@@ -971,7 +1175,17 @@ async def run_extraction():
                 
             if history_rows:
                 csv_data = "発注日,状態,メーカー,品名,規格,単位,数量,発注先,納品予定\n" + "\n".join(history_rows)
-                requests.post(GAS_WEB_APP_URL, params={'type': 'history'}, data=csv_data.encode('utf-8'))
+                resp_hist = requests.post(GAS_WEB_APP_URL, params={'type': 'history'}, data=csv_data.encode('utf-8'), timeout=60)
+                try:
+                    resp_json = resp_hist.json()
+                    if resp_json.get('status') != 'success':
+                        err_msg = f"GAS API Error [history]: {resp_json}"
+                        send_log(err_msg)
+                        raise RuntimeError(err_msg)
+                except ValueError:
+                    err_msg = f"GAS API Response Error [history]: HTTP {resp_hist.status_code}"
+                    send_log(err_msg)
+                    raise RuntimeError(err_msg)
                 print(f"[{datetime.now()}] 発注履歴統合送信: {len(history_rows)} 件")
 
             # Combine Deliveries
@@ -982,7 +1196,17 @@ async def run_extraction():
             if receive_rows:
                 # GAS expects Date, Name, Supplier, Qty for processIncomingDeliveries (index finding)
                 csv_data = "納品日,薬品名,取引先,数量\n" + "\n".join(receive_rows)
-                requests.post(GAS_WEB_APP_URL, params={'type': 'receive_history'}, data=csv_data.encode('utf-8'))
+                resp_recv = requests.post(GAS_WEB_APP_URL, params={'type': 'receive_history'}, data=csv_data.encode('utf-8'), timeout=60)
+                try:
+                    resp_json = resp_recv.json()
+                    if resp_json.get('status') != 'success':
+                        err_msg = f"GAS API Error [receive_history]: {resp_json}"
+                        send_log(err_msg)
+                        raise RuntimeError(err_msg)
+                except ValueError:
+                    err_msg = f"GAS API Response Error [receive_history]: HTTP {resp_recv.status_code}"
+                    send_log(err_msg)
+                    raise RuntimeError(err_msg)
                 print(f"[{datetime.now()}] 納品実績(MedOrder)送信: {len(receive_rows)} 件")
 
         except Exception as e_comb:
@@ -1015,7 +1239,24 @@ async def main():
                 print(f"[{datetime.now()}] [ERROR] {fatal_msg}")
                 report_status("Fatal Error")
                 send_log(fatal_msg)
-                sys.exit(1)  # GitHub Actionsを失敗させてメール通知をトリガー
+                try:
+                    alert_payload = {"action": "send_alert", "subject": "自動同期 全体エラー", "message": f"在庫アプリの自動同期で致命的なエラーが発生しました。\n詳細:\n{fatal_msg}\n\nPCの環境やネットワーク状況を確認するか、手動で同期スクリプトをお試しください。"}
+                    requests.post(GAS_WEB_APP_URL, json=alert_payload, timeout=10)
+                except Exception as alert_err:
+                    print(f"[{datetime.now()}] 致命的エラー時のアラートメール送信失敗: {alert_err}")
+                
+                # ローカル用ポップアップ通知
+                import subprocess
+                subprocess.Popen(['python', '-c', f'import ctypes; ctypes.windll.user32.MessageBoxW(0, "同期処理でエラーが発生し、中断しました。\\nエラー詳細:\\n{e}", "【在庫アプリシステム】エラー", 0 | 0x10)'])
+                sys.exit(1)
 
 if __name__ == "__main__":
+    is_daily_mode = "--mode" in sys.argv and "daily" in sys.argv
+    force_looker = "--force-looker" in sys.argv
+    current_hour = datetime.now().hour
+    # --force-looker が指定されている場合は時間帯チェックをスキップ
+    if not is_daily_mode and not force_looker and (current_hour < 9 or current_hour >= 19):
+        print(f"[{datetime.now()}] [INFO] 実行時間外 (9:00 - 19:00のみ実行) のため処理をスキップします。")
+        print(f"[{datetime.now()}] [INFO] 強制実行する場合は --force-looker オプションを使ってください。")
+        sys.exit(0)
     asyncio.run(main())

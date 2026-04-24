@@ -128,6 +128,12 @@ function doPost(e) {
         return ContentService.createTextOutput(JSON.stringify(data))
           .setMimeType(ContentService.MimeType.JSON);
       }
+      if (action === 'inventory_dump') {
+        const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_INVENTORY);
+        const data = sheet ? sheet.getDataRange().getValues() : [];
+        return ContentService.createTextOutput(JSON.stringify(data))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
       if (action === 'return') {
         const results = getGenericSheetData(SHEET_RETURN_RECOMMENDED);
         return ContentService.createTextOutput(JSON.stringify(results))
@@ -139,7 +145,7 @@ function doPost(e) {
           .setMimeType(ContentService.MimeType.JSON);
       }
       if (action === 'pending_deliveries') {
-        const results = getGenericSheetData(SHEET_PENDING_DELIVERIES);
+        const results = getPendingDeliveries();
         return ContentService.createTextOutput(JSON.stringify(results))
           .setMimeType(ContentService.MimeType.JSON);
       }
@@ -273,6 +279,15 @@ function doPost(e) {
     if (!sheet) sheet = spreadsheet.insertSheet(targetSheetName);
 
     if (csvData.length > 0 && csvData[0].length > 1) {
+      // 未納未定の場合、新規追加チェックを行う
+      if (dataType === 'pending_deliveries') {
+        try {
+          notifyNewPendingItems_(sheet, csvData);
+        } catch (e) {
+          console.error('Notification Error: ' + e.toString());
+        }
+      }
+
       sheet.clearContents();
       sheet.getRange(1, 1, csvData.length, csvData[0].length).setValues(csvData);
       clearDataCache_(targetSheetName); // ★キャッシュ無効化
@@ -798,11 +813,16 @@ function getReceiveHistoryData() {
     } else {
       dateStr = String(dateVal).replace(/^'/, '');
     }
+    let qtyColIdx = -1;
+    for (let j = 0; j < headers.length; j++) {
+      if (String(headers[j]).indexOf('数量') !== -1) qtyColIdx = j;
+    }
     
     results.push({
       receiveDate: dateStr,
       name: medicineName,
-      wholesaler: wholesalerColIdx !== -1 ? String(row[wholesalerColIdx]).trim() : ''
+      wholesaler: wholesalerColIdx !== -1 ? String(row[wholesalerColIdx]).trim() : '',
+      quantity: qtyColIdx !== -1 ? String(row[qtyColIdx]).trim() : ''
     });
   }
   return results;
@@ -814,9 +834,8 @@ function getMhlwSupplyMap_() {
     rows: []
   };
   try {
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_MHLW_SUPPLY);
-    if (!sheet) return mhlwData;
-    const data = sheet.getDataRange().getValues();
+    const data = getCachedData_(SHEET_MHLW_SUPPLY, false);
+    if (!data) return mhlwData;
     for (let i = 1; i < data.length; i++) {
         const medName = String(data[i][0] || '').trim();
         const status = String(data[i][1] || '').trim();
@@ -1911,4 +1930,65 @@ function testSendEmail() {
     body: "このメールが届いていれば、メール送信権限の承認は成功しています。\n在庫アプリからのアラートがこのアドレスに届くようになります。"
   });
   Logger.log("テストメールを送信しました！");
+}
+
+/**
+ * 未納未定リストの新規追加をチェックして通知
+ */
+function notifyNewPendingItems_(sheet, newData) {
+  const oldData = sheet.getDataRange().getValues();
+  if (oldData.length <= 1) return; // ヘッダーのみ、または空なら通知しない
+
+  const oldSet = new Set();
+  // 1行目はヘッダー
+  for (let i = 1; i < oldData.length; i++) {
+    const name = String(oldData[i][1]).trim();
+    const supplier = String(oldData[i][2]).trim();
+    if (name && supplier) {
+      oldSet.add(name + '|' + supplier);
+    }
+  }
+
+  const newItems = [];
+  // newDataも1行目はヘッダー
+  for (let i = 1; i < newData.length; i++) {
+    const name = String(newData[i][1]).trim();
+    const supplier = String(newData[i][2]).trim();
+    if (name && supplier && !oldSet.has(name + '|' + supplier)) {
+      newItems.push({
+        date: newData[i][0],
+        name: name,
+        supplier: supplier,
+        status: newData[i][3],
+        qty: newData[i][4]
+      });
+    }
+  }
+
+  if (newItems.length > 0) {
+    const props = PropertiesService.getScriptProperties();
+    const alertEmail = props.getProperty('ALERT_EMAIL') || 'masamitting@gmail.com';
+    
+    const subject = "【在庫アプリ】未納未定の新規追加通知 (" + newItems.length + "件)";
+    let body = "以下の商品が未納未定リストに新規追加されました。\n\n";
+    
+    newItems.forEach(item => {
+      body += "---------------------------------\n";
+      body += "【薬品名】" + item.name + "\n";
+      body += "【卸名】  " + item.supplier + "\n";
+      body += "【ステータス】" + item.status + "\n";
+      body += "【数量】  " + item.qty + "\n";
+      body += "【日付】  " + item.date + "\n";
+    });
+    
+    body += "\n---------------------------------\n";
+    body += "詳細はダッシュボードをご確認ください。";
+
+    MailApp.sendEmail({
+      to: alertEmail,
+      subject: subject,
+      body: body
+    });
+    console.log('New pending items notification sent: ' + newItems.length + ' items');
+  }
 }

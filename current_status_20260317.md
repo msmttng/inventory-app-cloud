@@ -1,38 +1,52 @@
-# 🚨 作業状況と再開のためのガイド (2026/03/17)
+# 作業状況と再開のためのガイド (2026/03/17 22:42 更新)
 
-このドキュメントは、ここまでの作業内容と、今後の運用・再開に向けたコンテキストを保存するものです。
+## 今回のセッションで完了したこと
 
-## 1. 今回完了したこと (Collabo Portal 直接スクレイピングの統合)
+### OrderEPI「納品予定: 取得前」問題の修正
 
-*   **静的JSONの廃止と動的抽出への移行**: `pharma_data.json` では「アレサガテープ」などのリアルタイムな発注納品状況が反映されていなかったため、Collabo Portal へ直接ログインして発注・納品予定を抽出する機能へと切り替えました。
-*   **Pythonスクリプト (`extract_data.py`) のアップデート**:
-    *   `extract_collabo` 関数を追加し、Playwrightを用いて裏側で自動的にブラウザを開き、`.env` に設定された `COLLABO_ID` と `COLLABO_PASSWORD` を使ってログイン。
-    *   発注一覧テーブル (NoukiSearch) からデータを直接スクレイピングし、Google Apps Script (GAS) バックエンドへデータを直接 POST するよう修正しました。
-*   **文字列マッチングの強化 (`Code.gs`)**:
-    *   スズケンの特有の半角カナ（ハイフンなどの表記ぶれ）を吸収するため、`normalizeText` 関数を強化（ハイフン `-` などを全角長音 `ー` へ変換）。
-*   **GAS バックエンド更新とデプロイ (`Code.gs`)**:
-    *   送られてくる `collabo_history` データを受け取り、`CollaboHistory` シートへ記録。
-    *   マイナス在庫の薬品リストに対して、Collabo Portal で取得した日付データと名寄せを行い、合致した場合は「納品予定日」と「(Collabo Portal)」というソース元を UI に反映するロジックを実装済み。
-    *   バックエンドのアプリケーションへの反映（デプロイ）を `clasp push` および `clasp deploy` で完了させています。
-*   **GitHub レポジトリへの保存**: この変更は `inventory-app-cloud` レポジトリへコミット＆プッシュ（保存）されています。
+**根本原因**: extract_data.py が medipal-app.com の配送予定テーブルを取得した後、order-epi.com の発注履歴テーブルと薬品名を名寄せするロジックで品名の表記差（半角カナ vs 全角カナ）により一致が失敗し、納品予定日が空のまま GAS に送られていた。
 
-## 2. 次回再開時のステップと注意事項
+**修正内容**:
 
-1.  **定期実行環境 (`extract_data.py`) の稼働確認**:
-    このスクリプトは、設定された環境（PC側のタスクスケジューラー）で実行されています。更新頻度は「1時間に1回」から「15分に1回」に変更されました。定期実行が稼働し、ログに `Collabo Portal History: Success (xx rows)` と表示され、Apps Script 側にデータが届いているか注視してください。
-2.  **UI 表示の最終確認**:
-    バックエンドデータの更新が完了したタイミングで、在庫アプリの「マイナス」タブを開いてください。「アレサガテープ」等の納品予定が「(Collabo Portal)」のラベルとともに表示されていれば完璧です。
-3.  **万が一、データの取得に失敗した場合**:
-    *   `.env` ファイルの ID/PASS が正しいか確認。
-    *   Collabo Portal の画面レイアウト（HTML構造）が変更された場合は、`extract_data.py` 内の `page.locator("table tr")` 等の抽出ロジックの修正が必要になる可能性があります。その際はこのドキュメントを参考にお声をかけてください。
+#### extract_data.py の変更
+- extract_orderepi() 関数を全面書き直し
+- medipal-app.com にログインし、配送予定テーブルを直接読み取る（253件確認済み）
+- 取得した「薬品名→配送予定日」マップを新規 `epi_delivery` タイプとして GAS に直接送信
+- order-epi.com の発注履歴も引き続き `history` タイプで送信（名寄せなし）
 
-## 3. 追加で対応・修正したこと (2026/03/17)
+#### Code.gs の変更
+- doPost: `epi_delivery` タイプを `EpiDelivery` シートに保存するよう追加
+- getEpiDeliveryDates_() 関数を新規追加: NFKC正規化した薬品名->配送予定日のマップを返す
+- getMinusStocks(): OrderEPI 発注済み判定後に epiDeliveryMap からルックアップして deliveryDate を設定
 
-*   **OrderEPI (メディパル) から納品予定日が取得できない不具合を修正**:
-    *   `extract_data.py` で、OrderEPIへのログイン時に画面のID入力欄のロードが完了する前に判定が行われ、結果としてログイン処理がまるごとスキップされてしまう問題を修正しました。
-    *   Playwrightの `wait_for_selector` を用いて最長10秒の待機処理を組み込みました。また、`.env` ファイルが読み込まれないケースを防ぐため、Pythonスクリプト自体が `.env` をパースして環境変数にセットするロジックをファイル先頭に追加しています。
+**デプロイ**: clasp push + clasp deploy @176 完了
+
+**動作確認（実行ログ）**:
+- Medipal 配送予定: 253件取得・GAS送信 HTTP 200
+- Order-EPI 発注履歴: 8行取得・送信成功
+- Collabo Portal: 50行取得・送信成功
+- マイナスタブで「取得前」が消えたことをユーザーが確認
 
 ---
-📝 **次回プロンプト（指示）の例**:
-「Collabo側のマイナス在庫の表示を確認しました。特に問題なかったので次のステップ（〇〇の機能）へ進みます」または
-「アレサガテープの表示がまだ出ないので、ログや状態を確認してください」などお気軽にお知らせください。
+
+## 現在の稼働状況
+
+- 定期実行: タスクスケジューラーで15分ごとに extract_data.py が実行中
+- データソース: Looker Studio（在庫）+ medipal-app.com（EPI配送予定）+ order-epi.com（発注履歴）+ Collabo Portal（スズケン）
+- GAS URL: https://script.google.com/macros/s/AKfycbwDhj91LpWaF6OWhTmr6hbYLgScu0tlBcs2Y4nyXvg2WAwybHYGd5-V579tf0I5_H2dCQ/exec (@176)
+
+---
+
+## 残課題・注意事項
+
+- Looker Studio タイムアウト: 認証状態(state.json)が期限切れになると失敗。再発時は state.json 再取得が必要
+- EpiDelivery マッチング: NFKC正規化で半角カナ→全角カナ変換済みだが、特殊な薬品名では一致しない場合あり
+- order-epi.com 発注履歴の列インデックス: サイト変更時に texts[2~6] の割り当てがズレる可能性あり
+
+---
+
+## 次回プロンプト例
+
+「EPI納品予定が正しく表示されています。次は〇〇の機能を追加したい」
+「EPIのデータが取れなくなったのでログを確認してください」
+「Looker Studioのタイムアウトが続いています」

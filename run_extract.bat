@@ -10,7 +10,8 @@ echo -----------------------------------------
 
 REM 仮想環境のPythonを使用して実行
 if exist ".\venv\Scripts\python.exe" (
-    ".\venv\Scripts\python.exe" extract_data.py
+    ".\venv\Scripts\python.exe" extract_data.py --force-looker
+    ".\venv\Scripts\python.exe" sync_to_supabase.py
 ) else (
     echo [エラー] 仮想環境 (venv) が見つかりません。
     echo extract_data.py を直接実行するか、venvを作成してください。
