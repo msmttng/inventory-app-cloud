@@ -151,6 +151,21 @@
           :class="activeTab==='search'?'bg-indigo-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
           <i class="fa-solid fa-magnifying-glass text-base"></i><span class="text-[11px] leading-none mt-0.5">検索</span>
         </button>
+        <button @click="switchToMinusTab"
+          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5 relative"
+          :class="activeTab==='minus'?'bg-rose-700 text-white shadow':'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-circle-minus text-base"></i><span class="text-[11px] leading-none mt-0.5">マイナス</span>
+          <span v-if="minusData.length>0&&activeTab!=='minus'"
+            class="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-rose-700 text-white text-xs font-bold rounded-full flex items-center justify-center px-1">
+            {{ minusData.length>99?'99+':minusData.length }}
+          </span>
+        </button>
+        <!-- 未納未定タブ -->
+        <button @click="switchToPendingTab"
+          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5"
+          :class="activeTab==='pending'?'bg-orange-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-truck-ramp-box text-base"></i><span class="text-[11px] leading-none mt-0.5">未納未定</span>
+        </button>
         <button @click="activeTab='supply'"
           class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5"
           :class="activeTab==='supply'?'bg-pink-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
@@ -191,26 +206,11 @@
           :class="activeTab==='history'?'bg-cyan-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
           <i class="fa-solid fa-clock-rotate-left text-base"></i><span class="text-[11px] leading-none mt-0.5">発注履歴</span>
         </button>
-        <!-- 未納未定タブ -->
-        <button @click="switchToPendingTab"
-          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5"
-          :class="activeTab==='pending'?'bg-orange-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
-          <i class="fa-solid fa-truck-ramp-box text-base"></i><span class="text-[11px] leading-none mt-0.5">未納未定</span>
-        </button>
         <!-- 納品履歴タブ -->
         <button @click="switchToReceiveTab"
           class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5"
           :class="activeTab==='receive'?'bg-emerald-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
           <i class="fa-solid fa-box-open text-base"></i><span class="text-[11px] leading-none mt-0.5">納品履歴</span>
-        </button>
-        <button @click="switchToMinusTab"
-          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5 relative"
-          :class="activeTab==='minus'?'bg-rose-700 text-white shadow':'text-gray-500 hover:bg-gray-100'">
-          <i class="fa-solid fa-circle-minus text-base"></i><span class="text-[11px] leading-none mt-0.5">マイナス</span>
-          <span v-if="minusData.length>0&&activeTab!=='minus'"
-            class="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-rose-700 text-white text-xs font-bold rounded-full flex items-center justify-center px-1">
-            {{ minusData.length>99?'99+':minusData.length }}
-          </span>
         </button>
       </div>
     </div>
@@ -242,6 +242,12 @@
       </div>
       <div v-if="errorMsg" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg flex items-start fade-in"><i class="fa-solid fa-triangle-exclamation text-red-500 mt-1 mr-3"></i><p class="text-red-700">{{ errorMsg }}</p></div>
       <div v-if="hasSearched&&!isLoading">
+        <div v-if="primaryResults.length === 0 && alternativeResults.length > 0" class="glass-card rounded-xl p-4 text-center bg-teal-50 border border-teal-100 mb-6 focus:outline-none fade-in">
+          <span class="text-sm font-semibold text-teal-700 block mb-1">
+            <i class="fa-solid fa-code-compare mr-1.5 opacity-80"></i>完全一致する在庫はありません。
+          </span>
+          <span class="text-xs text-teal-600 block opacity-90">代わりに、同じ成分を持つ代替薬を以下に表示しています。</span>
+        </div>
         <div v-if="results.length===0" class="glass-card rounded-2xl p-10 text-center fade-in flex flex-col items-center"><div class="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-4"><i class="fa-solid fa-box-open text-3xl text-gray-300"></i></div><h3 class="text-lg font-medium text-gray-900 mb-1">見つかりませんでした</h3><p class="text-gray-500 text-sm">「{{ lastSearchedQuery }}」に一致する薬は登録されていません。</p></div>
         <div v-else>
           <div class="flex justify-between items-center mb-3 px-2"><h2 class="text-lg font-semibold text-gray-700">検索結果</h2><div class="flex items-center gap-2"><span v-if="lowStockCount>0" class="text-xs font-medium bg-amber-100 text-amber-700 py-1 px-3 rounded-full flex items-center gap-1 low-stock-pulse"><i class="fa-solid fa-triangle-exclamation text-xs"></i> 在庫わずか {{ lowStockCount }}件</span><span class="text-xs font-medium bg-indigo-100 text-indigo-800 py-1 px-3 rounded-full">合致 {{ primaryResults.length }}件 <span v-if="alternativeResults.length>0">/ 代替 {{ alternativeResults.length }}件</span></span></div></div>
@@ -255,6 +261,7 @@
                     <span v-if="item.type&&item.type.includes('先発')" class="text-[10px] font-bold text-blue-700 bg-blue-100 border border-blue-200 rounded px-1.5 py-0.5">先発品</span>
                     <span v-if="item.supplyStatus&&item.supplyStatus!=='通常出荷'" class="text-[10px] font-bold text-pink-700 bg-pink-100 border border-pink-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-truck-fast mr-1"></i>{{ item.supplyStatus }}</span>
                     <span v-if="isLowStock(item.stock)" class="text-xs font-bold text-amber-600 bg-amber-100 border border-amber-200 rounded-full px-2 py-0.5 flex items-center gap-1 low-stock-pulse"><i class="fa-solid fa-triangle-exclamation text-xs"></i> 在庫わずか</span>
+                    <span v-if="item.nextDelivery" class="text-[10px] font-bold text-emerald-700 bg-emerald-100 border border-emerald-200 rounded px-1.5 py-0.5"><i class="fa-regular fa-calendar-check mr-1"></i>最終納品日: {{ item.nextDelivery }}</span>
                   </div>
                   <h3 class="text-lg sm:text-xl font-bold text-gray-900 leading-tight break-words">{{ item.name }}</h3>
                   <div class="flex flex-wrap items-center gap-2 mt-2 mb-1">
@@ -306,6 +313,7 @@
                       <span v-if="item.type&&item.type.includes('先発')" class="text-[10px] font-bold text-blue-700 bg-blue-100 border border-blue-200 rounded px-1.5 py-0.5">先発品</span>
                       <span v-if="item.supplyStatus&&item.supplyStatus!=='通常出荷'" class="text-[10px] font-bold text-pink-700 bg-pink-100 border border-pink-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-truck-fast mr-1"></i>{{ item.supplyStatus }}</span>
                       <span v-if="isLowStock(item.stock)" class="text-xs font-bold text-amber-600 bg-amber-100 border border-amber-200 rounded-full px-2 py-0.5 flex items-center gap-1 low-stock-pulse"><i class="fa-solid fa-triangle-exclamation text-xs"></i> わずか</span>
+                      <span v-if="item.nextDelivery" class="text-[10px] font-bold text-emerald-700 bg-emerald-100 border border-emerald-200 rounded px-1.5 py-0.5"><i class="fa-regular fa-calendar-check mr-1"></i>最終納品日: {{ item.nextDelivery }}</span>
                     </div>
                     <h3 class="text-base sm:text-lg font-bold text-gray-800 leading-tight break-words">{{ item.name }}</h3>
                     <div class="flex flex-wrap items-center gap-2 mt-2 mb-1">
@@ -903,28 +911,59 @@
           <div v-for="group in groupedPendingData" :key="group.supplier" class="flex flex-col h-full">
             <div class="flex items-center gap-2 mb-2 px-1">
               <span class="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full shadow-sm"
-                :class="supplierBadgeClass(group.supplier)">
+                :class="{
+                  'bg-red-100 text-red-700 border border-red-300': group.supplier==='Medipal',
+                  'bg-blue-100 text-blue-700 border border-blue-300': group.supplier==='Alf',
+                  'bg-emerald-100 text-emerald-700 border border-emerald-300': group.supplier==='Collabo',
+                  'bg-gray-100 text-gray-600 border border-gray-200': !['Medipal','Alf','Collabo'].includes(group.supplier)
+                }">
                 <i class="fa-solid fa-truck text-[10px]"></i> {{ group.supplier }}
               </span>
               <span class="text-[10px] text-gray-500 font-bold bg-white px-1.5 py-0.5 rounded-full border border-gray-200">{{ group.items.length }}件</span>
             </div>
             <div class="glass-card rounded-xl overflow-hidden shadow-sm flex-1">
-              <div v-for="(item,i) in group.items" :key="i" class="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-orange-50 transition-colors fade-in" :style="'animation-delay:'+(i*0.02)+'s'">
+              <div v-for="(item,i) in group.items" :key="i"
+                class="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 transition-colors fade-in"
+                :class="{
+                  'hover:bg-red-50 border-l-4 border-l-red-300': group.supplier==='Medipal',
+                  'hover:bg-blue-50 border-l-4 border-l-blue-300': group.supplier==='Alf',
+                  'hover:bg-emerald-50 border-l-4 border-l-emerald-300': group.supplier==='Collabo',
+                  'hover:bg-orange-50': !['Medipal','Alf','Collabo'].includes(group.supplier)
+                }"
+                :style="'animation-delay:'+(i*0.02)+'s'">
                 <div class="flex-1 min-w-0 mr-3">
                   <div class="font-bold text-gray-800 text-base leading-tight">{{ item['品名'] || item.name || '-' }}</div>
                   <div class="flex items-center gap-2 mt-1.5 flex-wrap">
                     <span v-if="item['日付']" class="inline-flex items-center gap-1 text-[10px] text-gray-500 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded-full whitespace-nowrap">
                       <i class="fa-regular fa-clock text-[9px]"></i> 確認: {{ formatPendingDate(item['日付']) }}
                     </span>
-                    <span v-if="item['ステータス'] || item.status" class="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200 whitespace-nowrap">
-                        <i class="fa-solid fa-triangle-exclamation text-[9px]"></i> {{ item['ステータス'] || item.status }}
+                    <span v-if="item['ステータス'] || item.status"
+                      class="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap"
+                      :class="{
+                        'bg-red-100 text-red-700 border border-red-200': (item['ステータス']||item.status||'').includes('停止') || (item['ステータス']||item.status||'').includes('調整') || (item['ステータス']||item.status||'').includes('辞退'),
+                        'bg-amber-100 text-amber-700 border border-amber-200': (item['ステータス']||item.status||'').includes('未定') || (item['ステータス']||item.status||'').includes('調達'),
+                        'bg-orange-100 text-orange-700 border border-orange-200': !(item['ステータス']||item.status||'').includes('停止') && !(item['ステータス']||item.status||'').includes('調整') && !(item['ステータス']||item.status||'').includes('辞退') && !(item['ステータス']||item.status||'').includes('未定') && !(item['ステータス']||item.status||'').includes('調達')
+                      }">
+                      <i class="fa-solid fa-triangle-exclamation text-[9px]"></i> {{ item['ステータス'] || item.status }}
                     </span>
                   </div>
                 </div>
                 <div class="shrink-0 flex items-center gap-3">
-                  <div class="text-center bg-orange-50 px-3 py-1.5 rounded-lg border border-orange-100 min-w-[50px]">
+                  <div class="text-center px-3 py-1.5 rounded-lg border min-w-[50px]"
+                    :class="{
+                      'bg-red-50 border-red-100': group.supplier==='Medipal',
+                      'bg-blue-50 border-blue-100': group.supplier==='Alf',
+                      'bg-emerald-50 border-emerald-100': group.supplier==='Collabo',
+                      'bg-orange-50 border-orange-100': !['Medipal','Alf','Collabo'].includes(group.supplier)
+                    }">
                     <div class="text-[10px] text-gray-500 font-bold mb-0.5 uppercase">数量</div>
-                    <div class="text-xl font-black text-gray-800">{{ item['数量'] || item.qty || '-' }}</div>
+                    <div class="text-xl font-black"
+                      :class="{
+                        'text-red-700': group.supplier==='Medipal',
+                        'text-blue-700': group.supplier==='Alf',
+                        'text-emerald-700': group.supplier==='Collabo',
+                        'text-gray-800': !['Medipal','Alf','Collabo'].includes(group.supplier)
+                      }">{{ item['数量'] || item.qty || '-' }}</div>
                   </div>
                 </div>
               </div>
@@ -1394,17 +1433,111 @@ createApp({
       }
     };
 
-    const performSearch = ()=>{
+    const supaUrl = 'https://jscqmecctsijqxihnxwi.supabase.co/rest/v1';
+    const supaKey = 'sb_publishable_GbXD31EVyWQALFA5yV_akQ_8nVkebe5';
+    const supaHeaders = { 'apikey': supaKey, 'Authorization': 'Bearer ' + supaKey };
+
+    const performSearch = async ()=>{
       if(!searchQuery.value.trim()) return;
       isLoading.value=true; errorMsg.value=''; hasSearched.value=true; lastSearchedQuery.value=searchQuery.value;
-      google.script.run.withSuccessHandler(d=>{results.value=d||[];isLoading.value=false;}).withFailureHandler(e=>{errorMsg.value='検索中にエラー: '+e;isLoading.value=false;}).searchMedicine(searchQuery.value);
+      try {
+        const hiraToKata = str => str.replace(/[\u3041-\u3096]/g, m => String.fromCharCode(m.charCodeAt(0) + 0x60));
+        const kataToHira = str => str.replace(/[\u30A1-\u30F6]/g, m => String.fromCharCode(m.charCodeAt(0) - 0x60));
+        
+        const kws = searchQuery.value.trim().split(/[\s\u3000]+/).filter(k=>k).map(k=>k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+        const andFilter = `and=(${kws.map(k => `or(name.ilike.*${encodeURIComponent(hiraToKata(k))}*,name.ilike.*${encodeURIComponent(kataToHira(k))}*)`).join(',')})`;
+        
+        const [invRes, mhlwRes] = await Promise.all([
+          fetch(`${supaUrl}/inventory?${andFilter}&select=*`, {headers: supaHeaders}),
+          fetch(`${supaUrl}/mhlw_supply?${andFilter}&select=yj_code,name,status`, {headers: supaHeaders})
+        ]);
+        const primaryInv = await invRes.json();
+        const mhlwData = await mhlwRes.json();
+
+        const yjPrefixes = new Set();
+        mhlwData.forEach(d => { if(d.yj_code) yjPrefixes.add(String(d.yj_code).substring(0,9)); });
+        primaryInv.forEach(d => { if(d.yj_code) yjPrefixes.add(String(d.yj_code).substring(0,9)); });
+
+        let altInv = [];
+        if(yjPrefixes.size > 0 && yjPrefixes.size < 50) {
+          const orFilter = Array.from(yjPrefixes).map(p=>`yj_code.ilike.${p}*`).join(',');
+          const altRes = await fetch(`${supaUrl}/inventory?or=(${orFilter})&select=*`, {headers: supaHeaders});
+          altInv = await altRes.json();
+        }
+
+        const finalResults = [];
+        const pNames = new Set(primaryInv.map(i=>i.name));
+        primaryInv.forEach(i => finalResults.push({...i, yjCode: i.yj_code, isPrimary:true}));
+        altInv.forEach(i => { if(!pNames.has(i.name)) finalResults.push({...i, yjCode: i.yj_code, isPrimary:false}); });
+
+        if(finalResults.length > 0) {
+          const nStr = finalResults.map(r=>`"${r.name}"`).join(',');
+          const sRes = await fetch(`${supaUrl}/mhlw_supply?name=in.(${encodeURIComponent(nStr)})&select=name,status`, {headers: supaHeaders});
+          if(sRes.ok) {
+            const sData = await sRes.json();
+            const sMap = {}; sData.forEach(s=>sMap[s.name]=s.status);
+            finalResults.forEach(r=>{ if(sMap[r.name]) r.supplyStatus = sMap[r.name]; else r.supplyStatus = '通常出荷'; });
+          }
+        }
+        results.value = finalResults;
+      } catch(e) {
+        errorMsg.value = '検索中にエラー: ' + e;
+      } finally {
+        isLoading.value = false;
+      }
     };
     const clearSearch = ()=>{searchQuery.value='';results.value=[];hasSearched.value=false;};
     
-    const performSupplySearch = ()=>{
+    const performSupplySearch = async ()=>{
       if(!supplyQuery.value.trim()) return;
       supplyIsLoading.value=true; supplyErrorMsg.value=''; supplyHasSearched.value=true; supplyLastSearchedQuery.value=supplyQuery.value;
-      google.script.run.withSuccessHandler(d=>{supplyResults.value=d||[];supplyIsLoading.value=false;}).withFailureHandler(e=>{supplyErrorMsg.value='検索中にエラー: '+e;supplyIsLoading.value=false;}).searchMhlw(supplyQuery.value);
+      try {
+        const hiraToKata = str => str.replace(/[\u3041-\u3096]/g, m => String.fromCharCode(m.charCodeAt(0) + 0x60));
+        const kataToHira = str => str.replace(/[\u30A1-\u30F6]/g, m => String.fromCharCode(m.charCodeAt(0) - 0x60));
+        
+        const kws = supplyQuery.value.trim().split(/[\s\u3000]+/).filter(k=>k).map(k=>k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+        const andFilter = `and=(${kws.map(k => `or(name.ilike.*${encodeURIComponent(hiraToKata(k))}*,name.ilike.*${encodeURIComponent(kataToHira(k))}*)`).join(',')})`;
+        
+        const mhlwRes = await fetch(`${supaUrl}/mhlw_supply?${andFilter}&select=*`, {headers: supaHeaders});
+        let primaryMhlw = await mhlwRes.json();
+
+        primaryMhlw.sort((a,b)=>a.name.length - b.name.length);
+        if(primaryMhlw.length > 100) primaryMhlw = primaryMhlw.slice(0, 100);
+
+        const yjPrefixes = new Set();
+        primaryMhlw.forEach(d => { if(d.yj_code) yjPrefixes.add(String(d.yj_code).substring(0,9)); });
+
+        let altMhlw = [];
+        if(yjPrefixes.size > 0 && yjPrefixes.size < 50) {
+          const orFilter = Array.from(yjPrefixes).map(p=>`yj_code.ilike.${p}*`).join(',');
+          const altRes = await fetch(`${supaUrl}/mhlw_supply?or=(${orFilter})&select=*`, {headers: supaHeaders});
+          const altData = await altRes.json();
+          const pNames = new Set(primaryMhlw.map(i=>i.name));
+          altData.forEach(d => { if(!pNames.has(d.name)) altMhlw.push(d); });
+        }
+        
+        const finalResults = [];
+        primaryMhlw.forEach(i => finalResults.push({...i, yjCode: i.yj_code, isPrimary:true}));
+        altMhlw.forEach(i => finalResults.push({...i, yjCode: i.yj_code, isPrimary:false}));
+
+        if(finalResults.length > 0) {
+          const nStr = finalResults.map(r=>`"${r.name}"`).join(',');
+          const iRes = await fetch(`${supaUrl}/inventory?name=in.(${encodeURIComponent(nStr)})&select=name,shelf,stock`, {headers: supaHeaders});
+          if(iRes.ok) {
+            const iData = await iRes.json();
+            const iMap = {}; iData.forEach(s=>iMap[s.name]=s);
+            finalResults.forEach(r=>{ 
+               if(iMap[r.name]) { r.shelf = iMap[r.name].shelf; r.stock = iMap[r.name].stock; }
+               else { r.shelf = ''; r.stock = ''; }
+            });
+          }
+        }
+        supplyResults.value = finalResults;
+      } catch(e) {
+        supplyErrorMsg.value = '検索中にエラー: ' + e;
+      } finally {
+        supplyIsLoading.value = false;
+      }
     };
     const clearSupplySearch = ()=>{supplyQuery.value='';supplyResults.value=[];supplyHasSearched.value=false;};
     const primarySupplyResults = computed(()=>supplyResults.value.filter(r=>r.isPrimary));
@@ -1602,7 +1735,7 @@ createApp({
         }, 1500);
       } else {
         // Open Order-EPI in a new tab for PC/Android.
-        window.open("https://www.order-epi.com/order/", "_blank");
+        window.open("https://www.order-epi.com/order/?mq=" + encodeURIComponent(searchKeyword), "_blank");
       }
     };
 
@@ -1625,7 +1758,7 @@ createApp({
       } catch (err) {
         console.error('Failed to copy text: ', err);
       }
-      window.open("https://app.medorder.jp/pharmacies/20/order#add", "_blank");
+      window.open("https://app.medorder.jp/pharmacies/20/order#add?mq=" + encodeURIComponent(searchKeyword), "_blank");
     };
 
     const normalizeForSearch = (name) => {
