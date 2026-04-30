@@ -1,4 +1,4 @@
-/*! tailwindcss v4.2.2 | MIT License | https://tailwindcss.com */
+/*! tailwindcss v4.2.4 | MIT License | https://tailwindcss.com */
 @layer properties;
 .absolute {
   position: absolute;
@@ -11,6 +11,9 @@
 }
 .top-1\/2 {
   top: calc(1 / 2 * 100%);
+}
+.z-50 {
+  z-index: 50;
 }
 .mt-auto {
   margin-top: auto;
@@ -33,6 +36,9 @@
 .h-full {
   height: 100%;
 }
+.max-h-\[90vh\] {
+  max-height: 90vh;
+}
 .min-h-screen {
   min-height: 100vh;
 }
@@ -44,6 +50,9 @@
 }
 .min-w-\[18px\] {
   min-width: 18px;
+}
+.min-w-\[40px\] {
+  min-width: 40px;
 }
 .min-w-\[44px\] {
   min-width: 44px;
@@ -122,6 +131,9 @@
 }
 .overflow-hidden {
   overflow: hidden;
+}
+.overflow-y-auto {
+  overflow-y: auto;
 }
 .rounded-full {
   border-radius: calc(infinity * 1px);
@@ -221,6 +233,9 @@
 .opacity-80 {
   opacity: 80%;
 }
+.opacity-90 {
+  opacity: 90%;
+}
 .ring-2 {
   --tw-ring-shadow: var(--tw-ring-inset,) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);
   box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
@@ -241,6 +256,11 @@
 }
 .transition-colors {
   transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to;
+  transition-timing-function: var(--tw-ease, ease);
+  transition-duration: var(--tw-duration, 0s);
+}
+.transition-opacity {
+  transition-property: opacity;
   transition-timing-function: var(--tw-ease, ease);
   transition-duration: var(--tw-duration, 0s);
 }
@@ -265,6 +285,10 @@
 .outline-none {
   --tw-outline-style: none;
   outline-style: none;
+}
+.select-none {
+  -webkit-user-select: none;
+  user-select: none;
 }
 .last\:border-0 {
   &:last-child {
