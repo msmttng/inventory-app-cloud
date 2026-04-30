@@ -5,8 +5,8 @@
 本番で使用しているWebアプリURLは以下の通りです。**デプロイ時は必ずこのIDを指定してください。**
 
 ```
-デプロイID: AKfycbxRmB7n67cNfGBfQaXXLwK3_QXIupiF-90c6AZsWa4IhaPspf4DkvXw-mTS2kVb1AL_jw
-URL: https://script.google.com/macros/s/AKfycbxRmB7n67cNfGBfQaXXLwK3_QXIupiF-90c6AZsWa4IhaPspf4DkvXw-mTS2kVb1AL_jw/exec
+デプロイID: AKfycbwp7WfGg5Md1-or1ihfVPH_KuMBQw41BVnUzR9iACTv0m8iG2DpLcnW-0Ui2zBFrTJWUg
+URL: https://script.google.com/macros/s/AKfycbwp7WfGg5Md1-or1ihfVPH_KuMBQw41BVnUzR9iACTv0m8iG2DpLcnW-0Ui2zBFrTJWUg/exec
 ```
 
 ## 1. GAS（バックエンド）へのデプロイコマンド
@@ -16,7 +16,7 @@ URL: https://script.google.com/macros/s/AKfycbxRmB7n67cNfGBfQaXXLwK3_QXIupiF-90c
 npx clasp push --force
 
 # 2. 本番デプロイメントを更新（必ず -i で本番IDを指定すること！）
-npx clasp deploy -i AKfycbxRmB7n67cNfGBfQaXXLwK3_QXIupiF-90c6AZsWa4IhaPspf4DkvXw-mTS2kVb1AL_jw -d "変更内容の説明"
+npx clasp deploy -i AKfycbwp7WfGg5Md1-or1ihfVPH_KuMBQw41BVnUzR9iACTv0m8iG2DpLcnW-0Ui2zBFrTJWUg -d "変更内容の説明"
 ```
 
 > **注意**: `-i` を省略すると新しいデプロイメントが作られ、本番URLに反映されません。
@@ -55,5 +55,5 @@ GitへのPush後、数分でGitHub Actionsが走り、GitHub Pages の内容が�
 
 | 用途 | デプロイID |
 |------|-----------|
-| **本番（上記）** | `AKfycbxRm...1AL_jw` |
+| **本番（上記）** | `AKfycbwp...TJWUg` |
 | PharmaScan Pro用 | `AKfycbwPmjajDh2A...vaxw` |
