@@ -1294,15 +1294,15 @@ if (typeof window.google === 'undefined') {
             <div v-if="histModalTab==='all'" class="absolute bottom-0 left-0 w-full h-0.5 bg-emerald-500"></div>
           </button>
           <button @click="histModalTab='in'" class="px-4 py-2 font-bold text-[11px] sm:text-xs transition-all relative" :class="histModalTab==='in'?'text-emerald-600':'text-gray-500 hover:text-gray-700'">
-            <i class="fa-solid fa-arrow-right-to-bracket mr-1"></i>入庫 ({{ histModalData.filter(h => h.transaction_type.includes('納品')).length }})
+            <i class="fa-solid fa-arrow-right-to-bracket mr-1"></i>入庫 ({{ histModalData.filter(h => isInType(h.transaction_type)).length }})
             <div v-if="histModalTab==='in'" class="absolute bottom-0 left-0 w-full h-0.5 bg-emerald-500"></div>
           </button>
           <button @click="histModalTab='out'" class="px-4 py-2 font-bold text-[11px] sm:text-xs transition-all relative" :class="histModalTab==='out'?'text-blue-600':'text-gray-500 hover:text-gray-700'">
-            <i class="fa-solid fa-arrow-right-from-bracket mr-1"></i>出庫 ({{ histModalData.filter(h => h.transaction_type.includes('調剤')).length }})
+            <i class="fa-solid fa-arrow-right-from-bracket mr-1"></i>出庫 ({{ histModalData.filter(h => isOutType(h.transaction_type)).length }})
             <div v-if="histModalTab==='out'" class="absolute bottom-0 left-0 w-full h-0.5 bg-blue-500"></div>
           </button>
           <button @click="histModalTab='other'" class="px-4 py-2 font-bold text-[11px] sm:text-xs transition-all relative" :class="histModalTab==='other'?'text-amber-600':'text-gray-500 hover:text-gray-700'">
-            <i class="fa-solid fa-box-open mr-1"></i>その他 ({{ histModalData.filter(h => !h.transaction_type.includes('納品') && !h.transaction_type.includes('調剤')).length }})
+            <i class="fa-solid fa-box-open mr-1"></i>その他 ({{ histModalData.filter(h => !isInType(h.transaction_type) && !isOutType(h.transaction_type)).length }})
             <div v-if="histModalTab==='other'" class="absolute bottom-0 left-0 w-full h-0.5 bg-amber-500"></div>
           </button>
         </div>
@@ -1322,7 +1322,7 @@ if (typeof window.google === 'undefined') {
             <div v-for="(h, i) in filteredHistModalData" :key="i" class="bg-white border border-gray-100 rounded-xl p-3 shadow-sm flex items-center justify-between hover:border-emerald-200 transition-colors">
               <div>
                 <div class="flex items-center gap-2 mb-1">
-                  <span class="text-xs font-bold px-2 py-0.5 rounded-full" :class="h.transaction_type==='調剤'?'bg-blue-100 text-blue-700':h.transaction_type.includes('納品')?'bg-emerald-100 text-emerald-700':h.transaction_type==='廃棄'?'bg-gray-100 text-gray-600':'bg-amber-100 text-amber-700'">{{ h.transaction_type }}</span>
+                  <span class="text-xs font-bold px-2 py-0.5 rounded-full" :class="isOutType(h.transaction_type)?'bg-blue-100 text-blue-700':isInType(h.transaction_type)?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'">{{ h.transaction_type }}</span>
                   <span class="text-[11px] text-gray-400 font-medium"><i class="fa-regular fa-clock"></i> {{ h.transaction_date }}</span>
                 </div>
                 <div v-if="h.partner" class="text-xs text-gray-500 font-medium mt-1"><i class="fa-solid fa-user-tag text-[10px] mr-1"></i>{{ h.partner }}</div>
@@ -1432,6 +1432,12 @@ createApp({
         
         // Update local state
         item.stock = newStock;
+        
+        // Clear cache to prevent stale search results
+        Object.keys(sessionStorage).forEach(k => {
+          if (k.startsWith('supa_cache_')) sessionStorage.removeItem(k);
+        });
+        
         adjustModalOpen.value = false;
         alert('在庫を調整しました！');
       } catch (err) {
@@ -1440,11 +1446,14 @@ createApp({
         isAdjusting.value = false;
       }
     };
+    const isInType = (t) => t && (t.includes('入庫') || t.includes('納品') || t.includes('取消'));
+    const isOutType = (t) => t && (t.includes('出庫') || t.includes('調剤') || t.includes('破棄'));
+
     const histModalTab = ref('all');
     const filteredHistModalData = computed(() => {
-      if (histModalTab.value === 'in') return histModalData.value.filter(h => h.transaction_type.includes('納品'));
-      if (histModalTab.value === 'out') return histModalData.value.filter(h => h.transaction_type.includes('調剤'));
-      if (histModalTab.value === 'other') return histModalData.value.filter(h => !h.transaction_type.includes('納品') && !h.transaction_type.includes('調剤'));
+      if (histModalTab.value === 'in') return histModalData.value.filter(h => isInType(h.transaction_type));
+      if (histModalTab.value === 'out') return histModalData.value.filter(h => isOutType(h.transaction_type));
+      if (histModalTab.value === 'other') return histModalData.value.filter(h => !isInType(h.transaction_type) && !isOutType(h.transaction_type));
       return histModalData.value;
     });
     const alertShelfFilter = ref(''); const alertUsageFilter = ref(''); const alertUnitFilter = ref('');
@@ -1841,7 +1850,12 @@ createApp({
 
     const supaUrl = 'https://jscqmecctsijqxihnxwi.supabase.co/rest/v1';
     const supaKey = 'sb_publishable_GbXD31EVyWQALFA5yV_akQ_8nVkebe5';
-    const supaHeaders = { 'apikey': supaKey, 'Authorization': 'Bearer ' + supaKey };
+    const supaHeaders = { 
+      'apikey': supaKey, 
+      'Authorization': 'Bearer ' + supaKey,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=minimal'
+    };
 
     const checkSystemHealth = async () => {
        try {
@@ -1866,7 +1880,25 @@ createApp({
        }
     };
     checkSystemHealth();
-    setInterval(checkSystemHealth, 5 * 60 * 1000); // Check every 5 mins
+    setInterval(checkSystemHealth, 60 * 60 * 1000); // Check every 60 mins (Egress節約)
+
+    // ── sessionStorageキャッシュ (Egress節約: 5分間同じ検索はSupabaseを呼ばない) ──
+    const SEARCH_CACHE_TTL = 5 * 60 * 1000;
+    const getSearchCache = (key) => {
+      try {
+        const raw = sessionStorage.getItem('supa_cache_' + key);
+        if (!raw) return null;
+        const { ts, data } = JSON.parse(raw);
+        if (Date.now() - ts > SEARCH_CACHE_TTL) { sessionStorage.removeItem('supa_cache_' + key); return null; }
+        return data;
+      } catch(e) { return null; }
+    };
+    const setSearchCache = (key, data) => {
+      try { sessionStorage.setItem('supa_cache_' + key, JSON.stringify({ ts: Date.now(), data })); } catch(e) {}
+    };
+
+    // inventory に必要な列のみ (select=* を廃止してEgress削減)
+    const INV_SELECT = 'yj_code,name,stock,shelf,unit,price,type,oldest_stock';
 
     const performSearch = async ()=>{
       if(!searchQuery.value.trim()) return;
@@ -1878,12 +1910,21 @@ createApp({
         const kws = searchQuery.value.trim().split(/[\s\u3000]+/).filter(k=>k).map(k=>k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
         const andFilter = `and=(${kws.map(k => `or(name.ilike.*${encodeURIComponent(hiraToKata(k))}*,name.ilike.*${encodeURIComponent(kataToHira(k))}*)`).join(',')})`;
         
-        const [invRes, mhlwRes] = await Promise.all([
-          fetch(`${supaUrl}/inventory?${andFilter}&select=*`, {headers: supaHeaders}),
-          fetch(`${supaUrl}/mhlw_supply?${andFilter}&select=yj_code,name,status`, {headers: supaHeaders})
-        ]);
-        const primaryInv = await invRes.json();
-        const mhlwData = await mhlwRes.json();
+        // キャッシュチェック
+        const cacheKey = 'inv_' + andFilter;
+        let primaryInv = getSearchCache(cacheKey);
+        let mhlwData = getSearchCache('mhlw_' + andFilter);
+
+        if (!primaryInv || !mhlwData) {
+          const [invRes, mhlwRes] = await Promise.all([
+            fetch(`${supaUrl}/inventory?${andFilter}&select=${INV_SELECT}`, {headers: supaHeaders}),
+            fetch(`${supaUrl}/mhlw_supply?${andFilter}&select=yj_code,name,status`, {headers: supaHeaders})
+          ]);
+          primaryInv = await invRes.json();
+          mhlwData = await mhlwRes.json();
+          setSearchCache(cacheKey, primaryInv);
+          setSearchCache('mhlw_' + andFilter, mhlwData);
+        }
 
         const yjPrefixes = new Set();
         mhlwData.forEach(d => { if(d.yj_code) yjPrefixes.add(String(d.yj_code).substring(0,9)); });
@@ -1893,12 +1934,19 @@ createApp({
         let altMhlw = [];
         if(yjPrefixes.size > 0 && yjPrefixes.size < 50) {
           const orFilter = Array.from(yjPrefixes).map(p=>`yj_code.ilike.${p}*`).join(',');
-          const [altRes, altMhlwRes] = await Promise.all([
-            fetch(`${supaUrl}/inventory?or=(${orFilter})&select=*`, {headers: supaHeaders}),
-            fetch(`${supaUrl}/mhlw_supply?or=(${orFilter})&select=yj_code,name,status`, {headers: supaHeaders})
-          ]);
-          altInv = await altRes.json();
-          altMhlw = await altMhlwRes.json();
+          const altCacheKey = 'alt_' + orFilter;
+          const cachedAlt = getSearchCache(altCacheKey);
+          if (cachedAlt) {
+            altInv = cachedAlt.inv || []; altMhlw = cachedAlt.mhlw || [];
+          } else {
+            const [altRes, altMhlwRes] = await Promise.all([
+              fetch(`${supaUrl}/inventory?or=(${orFilter})&select=${INV_SELECT}`, {headers: supaHeaders}),
+              fetch(`${supaUrl}/mhlw_supply?or=(${orFilter})&select=yj_code,name,status`, {headers: supaHeaders})
+            ]);
+            altInv = await altRes.json();
+            altMhlw = await altMhlwRes.json();
+            setSearchCache(altCacheKey, { inv: altInv, mhlw: altMhlw });
+          }
         }
 
         const finalResults = [];
@@ -1997,7 +2045,7 @@ createApp({
         let primaryMhlw = [];
         if (typeof overrideYjCode === 'string' && overrideYjCode) {
             const yj = overrideYjCode.substring(0,9);
-            const mhlwRes = await fetch(`${supaUrl}/mhlw_supply?yj_code=ilike.${yj}*&select=*`, {headers: supaHeaders});
+            const mhlwRes = await fetch(`${supaUrl}/mhlw_supply?yj_code=ilike.${yj}*&select=yj_code,name,status`, {headers: supaHeaders});
             primaryMhlw = await mhlwRes.json();
         } else {
             const hiraToKata = str => str.replace(/[\u3041-\u3096]/g, m => String.fromCharCode(m.charCodeAt(0) + 0x60));
@@ -2006,7 +2054,7 @@ createApp({
             const kws = supplyQuery.value.trim().split(/[\s\u3000]+/).filter(k=>k).map(k=>k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
             const andFilter = `and=(${kws.map(k => `or(name.ilike.*${encodeURIComponent(hiraToKata(k))}*,name.ilike.*${encodeURIComponent(kataToHira(k))}*)`).join(',')})`;
             
-            const mhlwRes = await fetch(`${supaUrl}/mhlw_supply?${andFilter}&select=*`, {headers: supaHeaders});
+            const mhlwRes = await fetch(`${supaUrl}/mhlw_supply?${andFilter}&select=yj_code,name,status`, {headers: supaHeaders});
             primaryMhlw = await mhlwRes.json();
         }
 
@@ -2019,7 +2067,7 @@ createApp({
         let altMhlw = [];
         if(yjPrefixes.size > 0 && yjPrefixes.size < 50) {
           const orFilter = Array.from(yjPrefixes).map(p=>`yj_code.ilike.${p}*`).join(',');
-          const altRes = await fetch(`${supaUrl}/mhlw_supply?or=(${orFilter})&select=*`, {headers: supaHeaders});
+          const altRes = await fetch(`${supaUrl}/mhlw_supply?or=(${orFilter})&select=yj_code,name,status`, {headers: supaHeaders});
           const altData = await altRes.json();
           const pNames = new Set(primaryMhlw.map(i=>i.name));
           altData.forEach(d => { if(!pNames.has(d.name)) altMhlw.push(d); });
@@ -2169,40 +2217,22 @@ createApp({
       deadLoading.value=true;
       deadError.value='';
       try {
-        // Fetch Dead Stock metadata
+        // Fetch Dead Stock items from pre-computed SYS_DEAD_STOCK record
         const metaRes = await fetch(supaUrl + '/inventory?yj_code=eq.SYS_DEAD_STOCK', {headers: supaHeaders});
-        if(!metaRes.ok) throw new Error("Metadata fetch failed");
+        if(!metaRes.ok) throw new Error("Dead stock fetch failed");
         const metaJson = await metaRes.json();
-        let dispensedCodes = new Set();
+        
+        let dead = [];
         if(metaJson.length > 0 && metaJson[0].shelf) {
            const parsed = JSON.parse(metaJson[0].shelf);
-           if(parsed.dispensed_codes) dispensedCodes = new Set(parsed.dispensed_codes);
+           if(parsed.dead_items) {
+               dead = parsed.dead_items;
+           } else if (parsed.dispensed_codes) {
+               throw new Error("Old data format detected. Please wait for the background script to update.");
+           }
         }
         
-        // Fetch all inventory items with stock > 0
-        const invRes = await fetch(supaUrl + '/inventory?stock=gt.0', {headers: supaHeaders});
-        if(!invRes.ok) throw new Error("Inventory fetch failed");
-        const allInv = await invRes.json();
-        
-        // Filter: stock > 0 AND not in dispensedCodes AND not a SYSTEM_RECORD
-        const dead = allInv.filter(item => 
-           item.yj_code && 
-           item.name !== 'SYSTEM_RECORD' && 
-           !dispensedCodes.has(item.yj_code) &&
-           parseFloat(item.stock) > 0
-        );
-        
-        // Enrich
-        const enriched = dead.map(item => {
-           let price = parseFloat(item.price) || 0;
-           return {
-               ...item,
-               price: price,
-               stockValue: price * parseFloat(item.stock)
-           };
-        });
-        
-        deadData.value = enriched;
+        deadData.value = dead;
       } catch (err) {
         deadError.value = 'エラー: ' + err.message;
       } finally {
@@ -2399,7 +2429,7 @@ createApp({
       histModalData.value = [];
       histModalTab.value = 'all';
       try {
-        const base = supaUrl + '/transaction_history?order=transaction_date.desc&limit=50';
+        const base = supaUrl + '/transaction_history?order=transaction_date.desc&limit=100&select=transaction_date,transaction_type,qty_in,qty_out,stock_balance,partner';
         let data = [];
         
         if (item.yjCode || item.yj_code) {
@@ -2542,7 +2572,7 @@ createApp({
       memos, editingMemo, editingMemoText, memoSaving, loadMemos, toggleMemoEdit, saveMemoAction,
       isDataStale, staleHoursText, isEnifTarget,
       tokenRefreshState, requestTokenRefresh,
-      histModalOpen, histModalItem, histModalData, histModalLoading, histModalError, openTransactionHistory, histModalTab, filteredHistModalData, adjustModalOpen, adjustModalItem, adjustStockValue, isAdjusting, openAdjustModal, submitAdjustment
+      histModalOpen, histModalItem, histModalData, histModalLoading, histModalError, openTransactionHistory, histModalTab, filteredHistModalData, adjustModalOpen, adjustModalItem, adjustStockValue, isAdjusting, openAdjustModal, submitAdjustment, isInType, isOutType
     };
   }
 }).mount('#app');
