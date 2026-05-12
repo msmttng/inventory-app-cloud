@@ -5,83 +5,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>薬の在庫・棚番検索アプリ</title>
-
-<script>
-// ==========================================
-// GAS API Proxy for Static Hosting (Frontend Separated)
-// ==========================================
-const GAS_API_URL = "https://script.google.com/macros/s/AKfycbxRmB7n67cNfGBfQaXXLwK3_QXIupiF-90c6AZsWa4IhaPspf4DkvXw-mTS2kVb1AL_jw/exec";
-
-const MAPPING = {
-  getMemos: { action: 'get_memos' },
-  saveMemo: { action: 'save_memo', args: ['yjCode', 'memo'] },
-  deleteMemo: { action: 'delete_memo', args: ['yjCode'] },
-  getLastUpdated: { action: 'lastUpdated' },
-  getAllLastUpdated: { action: 'allLastUpdated' },
-  searchMedicine: { action: 'search', args: ['query'] },
-  searchMhlw: { action: 'searchMhlw', args: ['query'] },
-  getShelfSummary: { action: 'summary' },
-  getReturnData: { action: 'return' },
-  getDeadData: { action: 'dead' },
-  getOrderHistory: { action: 'history' },
-  getPendingDeliveries: { action: 'pending_deliveries' },
-  getReceiveHistoryData: { action: 'receive_history' },
-  getLiveStocks: { action: 'live', args: ['page'] },
-  getMinusStocks: { action: 'get_minus_stocks' },
-  triggerGitHubWorkflow: { action: 'trigger_github_workflow' },
-  getExpiryData: { action: 'get_expiry_data' }
-};
-
-if (typeof window.google === 'undefined') {
-  window.google = { script: { run: {} } };
-  
-  function buildRunner() {
-    let successHandler = () => {};
-    let failureHandler = () => {};
-    
-    const runner = {
-      withSuccessHandler: function(cb) { successHandler = cb; return this; },
-      withFailureHandler: function(cb) { failureHandler = cb; return this; }
-    };
-    
-    Object.keys(MAPPING).forEach(methodName => {
-      runner[methodName] = async function(...args) {
-         try {
-             const mapping = MAPPING[methodName];
-             const payload = { action: mapping.action };
-             if (mapping.args) {
-                mapping.args.forEach((argName, idx) => {
-                   payload[argName] = args[idx];
-                });
-             }
-             console.log("Fetching API:", payload);
-             const res = await fetch(GAS_API_URL, {
-                 method: 'POST',
-                 headers: { 'Content-Type': 'text/plain' },
-                 body: JSON.stringify(payload)
-             });
-             if (!res.ok) throw new Error("HTTP error " + res.status);
-             const data = await res.json();
-             successHandler(data);
-         } catch(e) {
-             console.error("API error for " + methodName, e);
-             failureHandler(e);
-         }
-      };
-    });
-    return runner;
-  }
-
-  Object.defineProperty(window.google.script, 'run', {
-    get: function() { return buildRunner(); }
-  });
-}
-</script>
-
-  <link rel="stylesheet" href="output.css">
+  <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    // サーバーサイド(GAS)から渡された初期パラメータ
+    window.INITIAL_HISTORY = "<?= initialHistory ?>";
+  </script>
   <style>
     body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
     .glass-card {
@@ -101,6 +32,12 @@ if (typeof window.google === 'undefined') {
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.65} }
     .minus-unordered-pulse { animation: unorderedPulse 2.5s ease-in-out infinite; }
     @keyframes unorderedPulse { 0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(239,68,68,0.3)} 50%{opacity:.8;box-shadow:0 0 0 4px rgba(239,68,68,0)} }
+    /* ── 速報バッジ ── */
+    .sokuho-box { background: linear-gradient(135deg,#eff6ff,#f0fdf4); border-color:#6ee7b7 !important; }
+    .sokuho-strikethrough { text-decoration: line-through; opacity: 0.45; }
+    .sokuho-badge { background: linear-gradient(90deg,#6366f1,#06b6d4); color:#fff; font-size:9px; font-weight:800; border-radius:4px; padding:1px 5px; letter-spacing:0.04em; }
+    @keyframes sokuhoFade { 0%,100%{opacity:1} 50%{opacity:.7} }
+    .sokuho-pulse { animation: sokuhoFade 2.5s ease-in-out infinite; }
     input[type=range] {
       -webkit-appearance:none; appearance:none;
       width:100%; height:4px; border-radius:4px;
@@ -378,10 +315,23 @@ if (typeof window.google === 'undefined') {
                   </div>
                 </div>
                 <div class="shrink-0 flex items-start">
-                  <div class="rounded-lg p-2 sm:p-3 min-w-[70px] sm:min-w-[90px] text-center border transition-colors flex flex-col justify-center" :class="item.isNotRegistered?'bg-red-50 border-red-200':isLowStock(item.stock)?'bg-amber-50 border-amber-200':'bg-gray-50 border-gray-100'">
-                    <div class="text-[10px] sm:text-xs font-medium mb-1" :class="item.isNotRegistered?'text-red-500':isLowStock(item.stock)?'text-amber-600':'text-gray-500'"><i class="fa-solid fa-cubes mr-1" :class="item.isNotRegistered?'text-red-400':isLowStock(item.stock)?'text-amber-400':'text-gray-400'"></i>在庫数</div>
-                    <div class="text-xl sm:text-2xl font-bold" :class="item.isNotRegistered?'text-red-600':isLowStock(item.stock)?'text-amber-600':'text-gray-800'">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
-                    <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                  <div class="rounded-lg p-2 sm:p-3 min-w-[70px] sm:min-w-[90px] text-center border transition-colors flex flex-col justify-center" :class="item.isNotRegistered?'bg-red-50 border-red-200':item.sokuhoQty?'sokuho-box border-emerald-200':isLowStock(item.stock)?'bg-amber-50 border-amber-200':'bg-gray-50 border-gray-100'">
+                    <div class="text-[10px] sm:text-xs font-medium mb-1" :class="item.isNotRegistered?'text-red-500':isLowStock(item.stock)?'text-amber-600':'text-gray-500'">
+                      <i class="fa-solid fa-cubes mr-1" :class="item.isNotRegistered?'text-red-400':isLowStock(item.stock)?'text-amber-400':'text-gray-400'"></i>在庫数
+                    </div>
+                    <!-- 速報あり: 打消し線旧在庫 → 矢印 → 新在庫 -->
+                    <template v-if="item.sokuhoQty">
+                      <div class="text-[11px] font-bold text-gray-400 sokuho-strikethrough leading-none">{{ item.sokuhoBaseStock }}</div>
+                      <div class="text-[10px] text-indigo-400 font-bold my-0.5">↓</div>
+                      <div class="text-xl sm:text-2xl font-bold text-indigo-700">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
+                      <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                      <div class="mt-1 sokuho-pulse"><span class="sokuho-badge"><i class="fa-solid fa-truck-fast mr-0.5"></i>速報+{{ item.sokuhoQty }}</span></div>
+                    </template>
+                    <!-- 通常表示 -->
+                    <template v-else>
+                      <div class="text-xl sm:text-2xl font-bold" :class="item.isNotRegistered?'text-red-600':isLowStock(item.stock)?'text-amber-600':'text-gray-800'">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
+                      <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                    </template>
                   </div>
                 </div>
               </div>
@@ -440,10 +390,19 @@ if (typeof window.google === 'undefined') {
                     </div>
                   </div>
                   <div class="shrink-0 flex items-start">
-                    <div class="rounded-lg p-2 min-w-[65px] sm:min-w-[80px] text-center border transition-colors flex flex-col justify-center" :class="item.isNotRegistered?'bg-red-50 border-red-200':isLowStock(item.stock)?'bg-amber-50 border-amber-200':'bg-white border-gray-100'">
+                    <div class="rounded-lg p-2 min-w-[65px] sm:min-w-[80px] text-center border transition-colors flex flex-col justify-center" :class="item.isNotRegistered?'bg-red-50 border-red-200':item.sokuhoQty?'sokuho-box border-emerald-200':isLowStock(item.stock)?'bg-amber-50 border-amber-200':'bg-white border-gray-100'">
                       <div class="text-[10px] font-medium mb-0.5" :class="item.isNotRegistered?'text-red-500':isLowStock(item.stock)?'text-amber-600':'text-gray-500'">在庫</div>
-                      <div class="text-lg sm:text-xl font-bold" :class="item.isNotRegistered?'text-red-600':isLowStock(item.stock)?'text-amber-600':'text-gray-800'">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
-                      <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                      <template v-if="item.sokuhoQty">
+                        <div class="text-[10px] font-bold text-gray-400 sokuho-strikethrough leading-none">{{ item.sokuhoBaseStock }}</div>
+                        <div class="text-[9px] text-indigo-400 font-bold">↓</div>
+                        <div class="text-lg sm:text-xl font-bold text-indigo-700">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
+                        <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                        <div class="mt-0.5 sokuho-pulse"><span class="sokuho-badge"><i class="fa-solid fa-truck-fast mr-0.5"></i>速報+{{ item.sokuhoQty }}</span></div>
+                      </template>
+                      <template v-else>
+                        <div class="text-lg sm:text-xl font-bold" :class="item.isNotRegistered?'text-red-600':isLowStock(item.stock)?'text-amber-600':'text-gray-800'">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
+                        <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                      </template>
                     </div>
                   </div>
                 </div>
@@ -680,7 +639,7 @@ if (typeof window.google === 'undefined') {
           <div v-if="tabUpdatedTimes.return" class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-3 px-2"><i class="fa-regular fa-clock"></i><span>データ更新: {{ tabUpdatedTimes.return }}</span></div>
           <div class="flex flex-wrap items-center gap-2 mb-3"><span class="text-xs font-semibold text-gray-400 mr-1">並び替え：</span><button v-for="opt in rdSortOptions" :key="opt.value" @click="returnSort=opt.value" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="returnSort===opt.value?'bg-blue-600 text-white border-blue-600 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-blue-400 hover:text-blue-600'"><i :class="opt.icon" class="mr-1"></i>{{ opt.label }}</button></div>
           <div class="relative mb-4"><i class="fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i><input v-model="returnFilterStr" type="text" placeholder="棚番・薬品名で絞り込み..." class="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-blue-400 bg-white" /><button v-if="returnFilterStr" @click="returnFilterStr=''" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors"><i class="fa-solid fa-xmark text-sm"></i></button></div>
-          <div class="glass-card rounded-xl overflow-hidden shadow-sm"><div v-for="(item,i) in filteredReturnData" :key="i" class="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-blue-50 transition-colors fade-in" :style="'animation-delay:'+(i*0.02)+'s'"><div class="flex-1 min-w-0 mr-3"><div class="font-bold text-gray-800 text-base truncate">{{ item.name }}</div><div class="flex items-center gap-2 mt-1"><div class="text-xs text-gray-500 flex items-center gap-1 font-medium bg-gray-100 w-fit px-2 py-0.5 rounded"><i class="fa-solid fa-layer-group text-xs text-blue-500"></i> {{ item.shelf!==""?item.shelf:"-" }}</div><div v-if="item.priceStr" class="text-[10px] text-gray-400 font-medium">薬価: {{ item.priceStr }}</div></div></div><div class="shrink-0 flex items-center gap-3"><div v-if="item.stockValueStr" class="text-right"><div class="text-[10px] text-gray-400 font-bold uppercase">在庫金額</div><div class="text-sm font-bold text-gray-600">{{ item.stockValueStr }}</div></div><div class="shrink-0 text-center bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100 min-w-[60px]"><div class="text-[10px] text-gray-400 font-bold mb-0.5 uppercase tracking-wide">在庫</div><div class="text-xl font-black text-gray-700">{{ item.stock!==""?item.stock:"-" }}</div></div></div></div></div>
+          <div class="glass-card rounded-xl overflow-hidden shadow-sm"><div v-for="(item,i) in filteredReturnData" :key="i" class="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-blue-50 transition-colors fade-in" :style="'animation-delay:'+(i*0.02)+'s'"><div class="flex-1 min-w-0 mr-3"><div class="font-bold text-gray-800 text-base truncate">{{ item.name }}</div><div class="flex flex-wrap items-center gap-2 mt-1"><div class="text-xs text-gray-500 flex items-center gap-1 font-medium bg-gray-100 w-fit px-2 py-0.5 rounded"><i class="fa-solid fa-layer-group text-xs text-blue-500"></i> {{ item.shelf!==""?item.shelf:"-" }}</div><div v-if="item.priceStr" class="text-[10px] text-gray-400 font-medium">薬価: {{ item.priceStr }}</div><div v-if="item.lot" class="text-[10px] text-indigo-600 flex items-center gap-1 font-medium bg-indigo-50 w-fit px-2 py-0.5 rounded border border-indigo-100"><i class="fa-solid fa-barcode text-[9px]"></i> LOT: {{ item.lot }}</div><div v-if="item.supplier" class="text-[10px] text-emerald-600 flex items-center gap-1 font-medium bg-emerald-50 w-fit px-2 py-0.5 rounded border border-emerald-100"><i class="fa-solid fa-truck text-[9px]"></i> 卸: {{ item.supplier }}</div><div v-if="item.lastPurchaseDate" class="text-[10px] text-amber-600 flex items-center gap-1 font-medium bg-amber-50 w-fit px-2 py-0.5 rounded border border-amber-100"><i class="fa-regular fa-calendar-check text-[9px]"></i> 購入: {{ item.lastPurchaseDate }}</div></div></div><div class="shrink-0 flex items-center gap-3"><div v-if="item.stockValueStr" class="text-right"><div class="text-[10px] text-gray-400 font-bold uppercase">在庫金額</div><div class="text-sm font-bold text-gray-600">{{ item.stockValueStr }}</div></div><div class="shrink-0 text-center bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100 min-w-[60px]"><div class="text-[10px] text-gray-400 font-bold mb-0.5 uppercase tracking-wide">在庫</div><div class="text-xl font-black text-gray-700">{{ item.stock!==""?item.stock:"-" }}</div></div></div></div></div>
         </div>
         <div v-else-if="!returnLoading" class="glass-card rounded-2xl p-10 text-center text-gray-400"><i class="fa-solid fa-rotate-left text-4xl mb-4 opacity-20 block"></i><p>返品推奨品はありません</p></div>
       </div>
@@ -694,7 +653,7 @@ if (typeof window.google === 'undefined') {
           <div v-if="tabUpdatedTimes.dead" class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-3 px-2"><i class="fa-regular fa-clock"></i><span>データ更新: {{ tabUpdatedTimes.dead }}</span></div>
           <div class="flex flex-wrap items-center gap-2 mb-3"><span class="text-xs font-semibold text-gray-400 mr-1">並び替え：</span><button v-for="opt in rdSortOptions" :key="opt.value" @click="deadSort=opt.value" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="deadSort===opt.value?'bg-purple-600 text-white border-purple-600 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-purple-400 hover:text-purple-600'"><i :class="opt.icon" class="mr-1"></i>{{ opt.label }}</button></div>
           <div class="relative mb-4"><i class="fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i><input v-model="deadFilterStr" type="text" placeholder="棚番・薬品名で絞り込み..." class="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-purple-400 bg-white" /><button v-if="deadFilterStr" @click="deadFilterStr=''" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors"><i class="fa-solid fa-xmark text-sm"></i></button></div>
-          <div class="glass-card rounded-xl overflow-hidden shadow-sm"><div v-for="(item,i) in filteredDeadData" :key="i" class="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-purple-50 transition-colors fade-in" :style="'animation-delay:'+(i*0.02)+'s'"><div class="flex-1 min-w-0 mr-3"><div class="font-bold text-gray-800 text-base truncate">{{ item.name }}</div><div class="flex items-center gap-2 mt-1"><div class="text-xs text-gray-500 flex items-center gap-1 font-medium bg-gray-100 w-fit px-2 py-0.5 rounded"><i class="fa-solid fa-layer-group text-xs text-purple-500"></i> {{ item.shelf!==""?item.shelf:"-" }}</div><div v-if="item.priceStr" class="text-[10px] text-gray-400 font-medium">薬価: {{ item.priceStr }}</div></div></div><div class="shrink-0 flex items-center gap-3"><div v-if="item.stockValueStr" class="text-right"><div class="text-[10px] text-gray-400 font-bold uppercase">在庫金額</div><div class="text-sm font-bold text-gray-600">{{ item.stockValueStr }}</div></div><div class="shrink-0 text-center bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100 min-w-[60px]"><div class="text-[10px] text-gray-400 font-bold mb-0.5 uppercase tracking-wide">在庫</div><div class="text-xl font-black text-gray-700">{{ item.stock!==""?item.stock:"-" }}</div></div></div></div></div>
+          <div class="glass-card rounded-xl overflow-hidden shadow-sm"><div v-for="(item,i) in filteredDeadData" :key="i" class="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-purple-50 transition-colors fade-in" :style="'animation-delay:'+(i*0.02)+'s'"><div class="flex-1 min-w-0 mr-3"><div class="font-bold text-gray-800 text-base truncate">{{ item.name }}</div><div class="flex flex-wrap items-center gap-2 mt-1"><div class="text-xs text-gray-500 flex items-center gap-1 font-medium bg-gray-100 w-fit px-2 py-0.5 rounded"><i class="fa-solid fa-layer-group text-xs text-purple-500"></i> {{ item.shelf!==""?item.shelf:"-" }}</div><div v-if="item.priceStr" class="text-[10px] text-gray-400 font-medium">薬価: {{ item.priceStr }}</div><div v-if="item.lot" class="text-[10px] text-indigo-600 flex items-center gap-1 font-medium bg-indigo-50 w-fit px-2 py-0.5 rounded border border-indigo-100"><i class="fa-solid fa-barcode text-[9px]"></i> LOT: {{ item.lot }}</div><div v-if="item.supplier" class="text-[10px] text-emerald-600 flex items-center gap-1 font-medium bg-emerald-50 w-fit px-2 py-0.5 rounded border border-emerald-100"><i class="fa-solid fa-truck text-[9px]"></i> 卸: {{ item.supplier }}</div><div v-if="item.lastPurchaseDate" class="text-[10px] text-amber-600 flex items-center gap-1 font-medium bg-amber-50 w-fit px-2 py-0.5 rounded border border-amber-100"><i class="fa-regular fa-calendar-check text-[9px]"></i> 購入: {{ item.lastPurchaseDate }}</div></div></div><div class="shrink-0 flex items-center gap-3"><div v-if="item.stockValueStr" class="text-right"><div class="text-[10px] text-gray-400 font-bold uppercase">在庫金額</div><div class="text-sm font-bold text-gray-600">{{ item.stockValueStr }}</div></div><div class="shrink-0 text-center bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100 min-w-[60px]"><div class="text-[10px] text-gray-400 font-bold mb-0.5 uppercase tracking-wide">在庫</div><div class="text-xl font-black text-gray-700">{{ item.stock!==""?item.stock:"-" }}</div></div></div></div></div>
         </div>
         <div v-else-if="!deadLoading" class="glass-card rounded-2xl p-10 text-center text-gray-400"><i class="fa-solid fa-ghost text-4xl mb-4 opacity-20 block"></i><p>不動在庫はありません</p></div>
       </div>
@@ -1258,7 +1217,7 @@ if (typeof window.google === 'undefined') {
           <p class="text-sm text-gray-600 mb-4 font-semibold">{{ adjustModalItem?.name }}</p>
           <div class="mb-4">
             <label class="block text-xs font-bold text-gray-500 mb-1">現在のシステム在庫</label>
-            <div class="text-lg font-bold text-gray-800 bg-gray-100 p-2 rounded text-center">{{ adjustModalItem?.stock }}</div>
+            <div class="text-lg font-bold text-gray-800 bg-gray-100 p-2 rounded text-center">{{ adjustModalItem?.stock !== undefined ? adjustModalItem.stock : adjustModalItem?.quantity }}</div>
           </div>
           <div class="mb-4">
             <label class="block text-xs font-bold text-gray-500 mb-1">実際の棚の数 (実在庫)</label>
@@ -1294,15 +1253,15 @@ if (typeof window.google === 'undefined') {
             <div v-if="histModalTab==='all'" class="absolute bottom-0 left-0 w-full h-0.5 bg-emerald-500"></div>
           </button>
           <button @click="histModalTab='in'" class="px-4 py-2 font-bold text-[11px] sm:text-xs transition-all relative" :class="histModalTab==='in'?'text-emerald-600':'text-gray-500 hover:text-gray-700'">
-            <i class="fa-solid fa-arrow-right-to-bracket mr-1"></i>入庫 ({{ histModalData.filter(h => isInType(h.transaction_type)).length }})
+            <i class="fa-solid fa-arrow-right-to-bracket mr-1"></i>入庫 ({{ histModalData.filter(h => h.transaction_type.includes('納品')).length }})
             <div v-if="histModalTab==='in'" class="absolute bottom-0 left-0 w-full h-0.5 bg-emerald-500"></div>
           </button>
           <button @click="histModalTab='out'" class="px-4 py-2 font-bold text-[11px] sm:text-xs transition-all relative" :class="histModalTab==='out'?'text-blue-600':'text-gray-500 hover:text-gray-700'">
-            <i class="fa-solid fa-arrow-right-from-bracket mr-1"></i>出庫 ({{ histModalData.filter(h => isOutType(h.transaction_type)).length }})
+            <i class="fa-solid fa-arrow-right-from-bracket mr-1"></i>出庫 ({{ histModalData.filter(h => h.transaction_type.includes('調剤')).length }})
             <div v-if="histModalTab==='out'" class="absolute bottom-0 left-0 w-full h-0.5 bg-blue-500"></div>
           </button>
           <button @click="histModalTab='other'" class="px-4 py-2 font-bold text-[11px] sm:text-xs transition-all relative" :class="histModalTab==='other'?'text-amber-600':'text-gray-500 hover:text-gray-700'">
-            <i class="fa-solid fa-box-open mr-1"></i>その他 ({{ histModalData.filter(h => !isInType(h.transaction_type) && !isOutType(h.transaction_type)).length }})
+            <i class="fa-solid fa-box-open mr-1"></i>その他 ({{ histModalData.filter(h => !h.transaction_type.includes('納品') && !h.transaction_type.includes('調剤')).length }})
             <div v-if="histModalTab==='other'" class="absolute bottom-0 left-0 w-full h-0.5 bg-amber-500"></div>
           </button>
         </div>
@@ -1322,8 +1281,8 @@ if (typeof window.google === 'undefined') {
             <div v-for="(h, i) in filteredHistModalData" :key="i" class="bg-white border border-gray-100 rounded-xl p-3 shadow-sm flex items-center justify-between hover:border-emerald-200 transition-colors">
               <div>
                 <div class="flex items-center gap-2 mb-1">
-                  <span class="text-xs font-bold px-2 py-0.5 rounded-full" :class="isOutType(h.transaction_type)?'bg-blue-100 text-blue-700':isInType(h.transaction_type)?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'">{{ h.transaction_type }}</span>
-                  <span class="text-[11px] text-gray-400 font-medium"><i class="fa-regular fa-clock"></i> {{ h.transaction_date }}</span>
+                  <span class="text-xs font-bold px-2 py-0.5 rounded-full" :class="h.transaction_type==='調剤'?'bg-blue-100 text-blue-700':h.transaction_type.includes('納品')?'bg-emerald-100 text-emerald-700':h.transaction_type==='廃棄'?'bg-gray-100 text-gray-600':'bg-amber-100 text-amber-700'">{{ h.transaction_type }}</span>
+                  <span class="text-[11px] text-gray-400 font-medium"><i class="fa-regular fa-clock"></i> {{ formatHistoryDate(h.transaction_date) }}</span>
                 </div>
                 <div v-if="h.partner" class="text-xs text-gray-500 font-medium mt-1"><i class="fa-solid fa-user-tag text-[10px] mr-1"></i>{{ h.partner }}</div>
               </div>
@@ -1351,6 +1310,73 @@ if (typeof window.google === 'undefined') {
 </div>
 
 <script>
+// ==========================================
+// ★ GitHub Pages 用の GAS 互換プロキシ層 ★
+// GAS以外の環境で google.script.run が存在しない場合、自動的に
+// GAS Web App へ POST(fetch) して同等の動作を実現します。
+// ==========================================
+if (typeof google === 'undefined') {
+  window.google = { script: { run: {} } };
+  
+  // clasp deployments の最新のWeb App URL
+  const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwp7WfGg5Md1-or1ihfVPH_KuMBQw41BVnUzR9iACTv0m8iG2DpLcnW-0Ui2zBFrTJWUg/exec';
+
+  const buildRun = (successHandler, failureHandler) => {
+    return new Proxy({}, {
+      get(target, prop) {
+        if (prop === 'withSuccessHandler') return (fn) => buildRun(fn, failureHandler);
+        if (prop === 'withFailureHandler') return (fn) => buildRun(successHandler, fn);
+        if (prop === 'withUserObject') return () => buildRun(successHandler, failureHandler); // 未使用だが一応
+        
+        return (...args) => {
+          let action = prop;
+          if (prop === 'getShelfSummary') action = 'summary';
+          if (prop === 'getReturnData') action = 'return';
+          if (prop === 'getDeadData') action = 'dead';
+          if (prop === 'getLiveStocks') action = 'live';
+          if (prop === 'getPendingDeliveries') action = 'pending_deliveries';
+          if (prop === 'getReceiveHistoryData') action = 'receive_history';
+          if (prop === 'getOrderHistory') action = 'history';
+          if (prop === 'getMinusStocks') action = 'get_minus_stocks';
+          if (prop === 'getExpiryData') action = 'expiry';
+          if (prop === 'requestTokenRefreshFromUI') action = 'request_token_refresh';
+          if (prop === 'getLastUpdated') action = 'lastUpdated';
+          if (prop === 'getAllLastUpdated') action = 'allLastUpdated';
+          
+          let payload = { action: action };
+          if (prop === 'getLiveStocks' && args.length > 0) payload.page = args[0];
+          if (prop === 'saveMemo' && args.length > 1) { payload.name = args[0]; payload.memo = args[1]; }
+          if (prop === 'deleteMemo' && args.length > 0) payload.name = args[0];
+          
+          fetch(GAS_WEB_APP_URL, {
+            method: 'POST',
+            body: JSON.stringify(payload),
+            headers: { 'Content-Type': 'text/plain' }
+          })
+          .then(res => res.json())
+          .then(data => { if (successHandler) successHandler(data); })
+          .catch(err => {
+            console.error('GAS Proxy Error:', err);
+            if (failureHandler) failureHandler(err);
+          });
+        };
+      }
+    });
+  };
+  
+  window.google.script.run = buildRun(null, null);
+  
+  // URL解析用のモック (必要最低限)
+  window.google.script.url = {
+    getLocation: (callback) => {
+      const params = new URLSearchParams(window.location.search);
+      let pObj = {};
+      for(let [k,v] of params) pObj[k] = v;
+      callback({ parameter: pObj });
+    }
+  };
+}
+
 const { createApp, ref, computed, onMounted } = Vue;
 createApp({
   setup() {
@@ -1385,7 +1411,8 @@ createApp({
     
     const openAdjustModal = (item) => {
       adjustModalItem.value = item;
-      adjustStockValue.value = String(item.stock).replace(/,/g, '');
+      const stockVal = item.stock !== undefined ? item.stock : (item.quantity !== undefined ? item.quantity : 0);
+      adjustStockValue.value = String(stockVal).replace(/,/g, '');
       adjustModalOpen.value = true;
     };
     
@@ -1432,12 +1459,7 @@ createApp({
         
         // Update local state
         item.stock = newStock;
-        
-        // Clear cache to prevent stale search results
-        Object.keys(sessionStorage).forEach(k => {
-          if (k.startsWith('supa_cache_')) sessionStorage.removeItem(k);
-        });
-        
+        if (item.quantity !== undefined) item.quantity = newStock;
         adjustModalOpen.value = false;
         alert('在庫を調整しました！');
       } catch (err) {
@@ -1446,14 +1468,11 @@ createApp({
         isAdjusting.value = false;
       }
     };
-    const isInType = (t) => t && (t.includes('入庫') || t.includes('納品') || t.includes('取消'));
-    const isOutType = (t) => t && (t.includes('出庫') || t.includes('調剤') || t.includes('破棄'));
-
     const histModalTab = ref('all');
     const filteredHistModalData = computed(() => {
-      if (histModalTab.value === 'in') return histModalData.value.filter(h => isInType(h.transaction_type));
-      if (histModalTab.value === 'out') return histModalData.value.filter(h => isOutType(h.transaction_type));
-      if (histModalTab.value === 'other') return histModalData.value.filter(h => !isInType(h.transaction_type) && !isOutType(h.transaction_type));
+      if (histModalTab.value === 'in') return histModalData.value.filter(h => h.transaction_type.includes('納品'));
+      if (histModalTab.value === 'out') return histModalData.value.filter(h => h.transaction_type.includes('調剤'));
+      if (histModalTab.value === 'other') return histModalData.value.filter(h => !h.transaction_type.includes('納品') && !h.transaction_type.includes('調剤'));
       return histModalData.value;
     });
     const alertShelfFilter = ref(''); const alertUsageFilter = ref(''); const alertUnitFilter = ref('');
@@ -1687,6 +1706,7 @@ createApp({
     const convertEyedrop = (stock, oldestStock, unit, name) => {
       const stockNum = parseFloat(stock);
       const u = String(unit||'').trim();
+      if (isNaN(stockNum)) return { displayStock: '-', displayUnit: u || '不明' };
       if (u === '瓶') return { displayStock: String(stock), displayUnit: '瓶' };
       const volFromOldest = extractBottleVol(oldestStock);
       if (volFromOldest && volFromOldest > 0) {
@@ -1765,6 +1785,24 @@ createApp({
             };
           }
         }).withFailureHandler(()=>{}).getAllLastUpdated();
+        
+        // URLパラメータのチェック（history=薬品名 で直接入出庫履歴を開く）
+        const handleHistoryParam = (drugName) => {
+          searchQuery.value = drugName;
+          setTimeout(() => {
+            openTransactionHistory({ name: drugName });
+          }, 500);
+        };
+
+        if (window.INITIAL_HISTORY && !window.INITIAL_HISTORY.includes('initialHistory')) {
+          handleHistoryParam(window.INITIAL_HISTORY);
+        } else if(google.script.url && google.script.url.getLocation) {
+          google.script.url.getLocation(function(location) {
+            if (location && location.parameter && location.parameter.history) {
+              handleHistoryParam(location.parameter.history);
+            }
+          });
+        }
       }
       if (typeof google!=='undefined'&&google.script&&google.script.run) {
         google.script.run.withSuccessHandler(data => {
@@ -1880,25 +1918,7 @@ createApp({
        }
     };
     checkSystemHealth();
-    setInterval(checkSystemHealth, 60 * 60 * 1000); // Check every 60 mins (Egress節約)
-
-    // ── sessionStorageキャッシュ (Egress節約: 5分間同じ検索はSupabaseを呼ばない) ──
-    const SEARCH_CACHE_TTL = 5 * 60 * 1000;
-    const getSearchCache = (key) => {
-      try {
-        const raw = sessionStorage.getItem('supa_cache_' + key);
-        if (!raw) return null;
-        const { ts, data } = JSON.parse(raw);
-        if (Date.now() - ts > SEARCH_CACHE_TTL) { sessionStorage.removeItem('supa_cache_' + key); return null; }
-        return data;
-      } catch(e) { return null; }
-    };
-    const setSearchCache = (key, data) => {
-      try { sessionStorage.setItem('supa_cache_' + key, JSON.stringify({ ts: Date.now(), data })); } catch(e) {}
-    };
-
-    // inventory に必要な列のみ (select=* を廃止してEgress削減)
-    const INV_SELECT = 'yj_code,name,stock,shelf,unit,price,type,oldest_stock';
+    setInterval(checkSystemHealth, 5 * 60 * 1000); // Check every 5 mins
 
     const performSearch = async ()=>{
       if(!searchQuery.value.trim()) return;
@@ -1910,21 +1930,12 @@ createApp({
         const kws = searchQuery.value.trim().split(/[\s\u3000]+/).filter(k=>k).map(k=>k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
         const andFilter = `and=(${kws.map(k => `or(name.ilike.*${encodeURIComponent(hiraToKata(k))}*,name.ilike.*${encodeURIComponent(kataToHira(k))}*)`).join(',')})`;
         
-        // キャッシュチェック
-        const cacheKey = 'inv_' + andFilter;
-        let primaryInv = getSearchCache(cacheKey);
-        let mhlwData = getSearchCache('mhlw_' + andFilter);
-
-        if (!primaryInv || !mhlwData) {
-          const [invRes, mhlwRes] = await Promise.all([
-            fetch(`${supaUrl}/inventory?${andFilter}&select=${INV_SELECT}`, {headers: supaHeaders}),
-            fetch(`${supaUrl}/mhlw_supply?${andFilter}&select=yj_code,name,status`, {headers: supaHeaders})
-          ]);
-          primaryInv = await invRes.json();
-          mhlwData = await mhlwRes.json();
-          setSearchCache(cacheKey, primaryInv);
-          setSearchCache('mhlw_' + andFilter, mhlwData);
-        }
+        const [invRes, mhlwRes] = await Promise.all([
+          fetch(`${supaUrl}/inventory?${andFilter}&select=*`, {headers: supaHeaders}),
+          fetch(`${supaUrl}/mhlw_supply?${andFilter}&select=yj_code,name,status`, {headers: supaHeaders})
+        ]);
+        const primaryInv = await invRes.json();
+        const mhlwData = await mhlwRes.json();
 
         const yjPrefixes = new Set();
         mhlwData.forEach(d => { if(d.yj_code) yjPrefixes.add(String(d.yj_code).substring(0,9)); });
@@ -1934,19 +1945,12 @@ createApp({
         let altMhlw = [];
         if(yjPrefixes.size > 0 && yjPrefixes.size < 50) {
           const orFilter = Array.from(yjPrefixes).map(p=>`yj_code.ilike.${p}*`).join(',');
-          const altCacheKey = 'alt_' + orFilter;
-          const cachedAlt = getSearchCache(altCacheKey);
-          if (cachedAlt) {
-            altInv = cachedAlt.inv || []; altMhlw = cachedAlt.mhlw || [];
-          } else {
-            const [altRes, altMhlwRes] = await Promise.all([
-              fetch(`${supaUrl}/inventory?or=(${orFilter})&select=${INV_SELECT}`, {headers: supaHeaders}),
-              fetch(`${supaUrl}/mhlw_supply?or=(${orFilter})&select=yj_code,name,status`, {headers: supaHeaders})
-            ]);
-            altInv = await altRes.json();
-            altMhlw = await altMhlwRes.json();
-            setSearchCache(altCacheKey, { inv: altInv, mhlw: altMhlw });
-          }
+          const [altRes, altMhlwRes] = await Promise.all([
+            fetch(`${supaUrl}/inventory?or=(${orFilter})&select=*`, {headers: supaHeaders}),
+            fetch(`${supaUrl}/mhlw_supply?or=(${orFilter})&select=yj_code,name,status`, {headers: supaHeaders})
+          ]);
+          altInv = await altRes.json();
+          altMhlw = await altMhlwRes.json();
         }
 
         const finalResults = [];
@@ -2029,6 +2033,38 @@ createApp({
           });
         }
         applyTypeCorrection(finalResults);
+
+        // ── 速報データを取得して付与 ──
+        try {
+          const today = new Date().toISOString().slice(0, 10);
+          const todayStart = `${today}T00:00:00+09:00`;
+          const sokuhoRes = await fetch(
+            `${supaUrl}/transaction_history?transaction_type=eq.%E7%B4%8D%E5%93%81(%E9%80%9F%E5%A0%B1)&transaction_date=gte.${encodeURIComponent(todayStart)}&select=name,yj_code,qty_in,stock_balance`,
+            {headers: supaHeaders}
+          );
+          if (sokuhoRes.ok) {
+            const sokuhoData = await sokuhoRes.json();
+            // 品名→最新速報レコード のマップ
+            const sokuhoMap = {};
+            sokuhoData.forEach(s => {
+              if (s.yj_code && !sokuhoMap[s.yj_code]) sokuhoMap[s.yj_code] = s;
+              if (s.name && !sokuhoMap[s.name]) sokuhoMap[s.name] = s;
+            });
+            finalResults.forEach(r => {
+              const hit = (r.yj_code && sokuhoMap[r.yj_code]) ? sokuhoMap[r.yj_code] : sokuhoMap[r.name];
+              if (hit && parseFloat(hit.qty_in) > 0) {
+                r.sokuhoQty = hit.qty_in;  // 速報加算量
+                // 速報前の在庫 = 現在stock - 速報加算量
+                const currentStock = parseFloat(r.stock);
+                if (!isNaN(currentStock)) {
+                  const base = currentStock - parseFloat(hit.qty_in);
+                  r.sokuhoBaseStock = Number.isInteger(base) ? base : Math.round(base * 100) / 100;
+                }
+              }
+            });
+          }
+        } catch(e) { console.warn('速報データ取得失敗', e); }
+
         results.value = finalResults;
       } catch(e) {
         errorMsg.value = '検索中にエラー: ' + e;
@@ -2045,7 +2081,7 @@ createApp({
         let primaryMhlw = [];
         if (typeof overrideYjCode === 'string' && overrideYjCode) {
             const yj = overrideYjCode.substring(0,9);
-            const mhlwRes = await fetch(`${supaUrl}/mhlw_supply?yj_code=ilike.${yj}*&select=yj_code,name,status`, {headers: supaHeaders});
+            const mhlwRes = await fetch(`${supaUrl}/mhlw_supply?yj_code=ilike.${yj}*&select=*`, {headers: supaHeaders});
             primaryMhlw = await mhlwRes.json();
         } else {
             const hiraToKata = str => str.replace(/[\u3041-\u3096]/g, m => String.fromCharCode(m.charCodeAt(0) + 0x60));
@@ -2054,7 +2090,7 @@ createApp({
             const kws = supplyQuery.value.trim().split(/[\s\u3000]+/).filter(k=>k).map(k=>k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
             const andFilter = `and=(${kws.map(k => `or(name.ilike.*${encodeURIComponent(hiraToKata(k))}*,name.ilike.*${encodeURIComponent(kataToHira(k))}*)`).join(',')})`;
             
-            const mhlwRes = await fetch(`${supaUrl}/mhlw_supply?${andFilter}&select=yj_code,name,status`, {headers: supaHeaders});
+            const mhlwRes = await fetch(`${supaUrl}/mhlw_supply?${andFilter}&select=*`, {headers: supaHeaders});
             primaryMhlw = await mhlwRes.json();
         }
 
@@ -2067,7 +2103,7 @@ createApp({
         let altMhlw = [];
         if(yjPrefixes.size > 0 && yjPrefixes.size < 50) {
           const orFilter = Array.from(yjPrefixes).map(p=>`yj_code.ilike.${p}*`).join(',');
-          const altRes = await fetch(`${supaUrl}/mhlw_supply?or=(${orFilter})&select=yj_code,name,status`, {headers: supaHeaders});
+          const altRes = await fetch(`${supaUrl}/mhlw_supply?or=(${orFilter})&select=*`, {headers: supaHeaders});
           const altData = await altRes.json();
           const pNames = new Set(primaryMhlw.map(i=>i.name));
           altData.forEach(d => { if(!pNames.has(d.name)) altMhlw.push(d); });
@@ -2187,7 +2223,9 @@ createApp({
     const rdSortOptions = [
       { label:'棚番順', value:'shelf', icon:'fa-solid fa-arrow-down-a-z' },
       { label:'薬品名順', value:'name', icon:'fa-solid fa-arrow-down-a-z' },
-      { label:'薬価順', value:'price', icon:'fa-solid fa-arrow-down-9-1' }
+      { label:'薬価順', value:'price', icon:'fa-solid fa-arrow-down-9-1' },
+      { label:'購入日順', value:'purchaseDate', icon:'fa-solid fa-calendar-days' },
+      { label:'卸名順', value:'supplier', icon:'fa-solid fa-truck' }
     ];
     const expirySortOptions = [
       { label:'使用期限順', value:'expiry', icon:'fa-solid fa-calendar-times' },
@@ -2210,6 +2248,8 @@ createApp({
       else if(returnSort.value==='name') d.sort((a,b)=>(a.name||'').localeCompare(b.name||'','ja',{numeric:true}));
       else if(returnSort.value==='price') d.sort((a,b)=>b.price-a.price);
       else if(returnSort.value==='stockValue') d.sort((a,b)=>b.stockValue-a.stockValue);
+      else if(returnSort.value==='purchaseDate') d.sort((a,b)=>new Date(b.lastPurchaseDate||0).getTime()-new Date(a.lastPurchaseDate||0).getTime());
+      else if(returnSort.value==='supplier') d.sort((a,b)=>(a.supplier||'').localeCompare(b.supplier||'','ja',{numeric:true}));
       return d;
     });
 
@@ -2217,9 +2257,9 @@ createApp({
       deadLoading.value=true;
       deadError.value='';
       try {
-        // Fetch Dead Stock items from pre-computed SYS_DEAD_STOCK record
+        // Fetch Dead Stock metadata
         const metaRes = await fetch(supaUrl + '/inventory?yj_code=eq.SYS_DEAD_STOCK', {headers: supaHeaders});
-        if(!metaRes.ok) throw new Error("Dead stock fetch failed");
+        if(!metaRes.ok) throw new Error("Metadata fetch failed");
         const metaJson = await metaRes.json();
         
         let dead = [];
@@ -2227,12 +2267,34 @@ createApp({
            const parsed = JSON.parse(metaJson[0].shelf);
            if(parsed.dead_items) {
                dead = parsed.dead_items;
-           } else if (parsed.dispensed_codes) {
-               throw new Error("Old data format detected. Please wait for the background script to update.");
            }
         }
+
+
+        // Fetch GAS Data for LOT, Supplier, Last Purchase Date enrichment
+        const getGasDeadData = () => new Promise(resolve => {
+          if (typeof google === 'undefined' || !google.script || !google.script.run) { resolve([]); return; }
+          google.script.run.withSuccessHandler(d => resolve(d||[])).withFailureHandler(() => resolve([])).getDeadData();
+        });
+        const gasDeadData = await getGasDeadData();
+        const gasMap = {};
+        gasDeadData.forEach(g => { gasMap[g.name] = g; });
         
-        deadData.value = dead;
+        // Enrich
+        const enriched = dead.map(item => {
+           let price = parseFloat(item.price) || 0;
+           let extra = gasMap[item.name] || {};
+           return {
+               ...item,
+               price: price,
+               stockValue: price * parseFloat(item.stock),
+               lot: extra.lot || '',
+               supplier: extra.supplier || '',
+               lastPurchaseDate: extra.lastPurchaseDate || ''
+           };
+        });
+        
+        deadData.value = enriched;
       } catch (err) {
         deadError.value = 'エラー: ' + err.message;
       } finally {
@@ -2246,6 +2308,8 @@ createApp({
       else if(deadSort.value==='name') d.sort((a,b)=>(a.name||'').localeCompare(b.name||'','ja',{numeric:true}));
       else if(deadSort.value==='price') d.sort((a,b)=>b.price-a.price);
       else if(deadSort.value==='stockValue') d.sort((a,b)=>b.stockValue-a.stockValue);
+      else if(deadSort.value==='purchaseDate') d.sort((a,b)=>new Date(b.lastPurchaseDate||0).getTime()-new Date(a.lastPurchaseDate||0).getTime());
+      else if(deadSort.value==='supplier') d.sort((a,b)=>(a.supplier||'').localeCompare(b.supplier||'','ja',{numeric:true}));
       return d;
     });
 
@@ -2429,7 +2493,7 @@ createApp({
       histModalData.value = [];
       histModalTab.value = 'all';
       try {
-        const base = supaUrl + '/transaction_history?order=transaction_date.desc&limit=100&select=transaction_date,transaction_type,qty_in,qty_out,stock_balance,partner';
+        const base = supaUrl + '/transaction_history?order=transaction_date.desc&limit=50';
         let data = [];
         
         if (item.yjCode || item.yj_code) {
@@ -2572,7 +2636,7 @@ createApp({
       memos, editingMemo, editingMemoText, memoSaving, loadMemos, toggleMemoEdit, saveMemoAction,
       isDataStale, staleHoursText, isEnifTarget,
       tokenRefreshState, requestTokenRefresh,
-      histModalOpen, histModalItem, histModalData, histModalLoading, histModalError, openTransactionHistory, histModalTab, filteredHistModalData, adjustModalOpen, adjustModalItem, adjustStockValue, isAdjusting, openAdjustModal, submitAdjustment, isInType, isOutType
+      histModalOpen, histModalItem, histModalData, histModalLoading, histModalError, openTransactionHistory, histModalTab, filteredHistModalData, adjustModalOpen, adjustModalItem, adjustStockValue, isAdjusting, openAdjustModal, submitAdjustment
     };
   }
 }).mount('#app');
