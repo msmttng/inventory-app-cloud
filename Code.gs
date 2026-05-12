@@ -12,6 +12,7 @@ const SHEET_MEMOS = '薬品メモ';
 const SHEET_RECEIVE_HISTORY = '納品履歴';
 const SHEET_PENDING_DELIVERIES = '未納未定';
 const SHEET_GS1_MASTER = '変換マスター'; // ★GS1変換用のマスターシート名
+const SHEET_MINUS_LEDGER = 'マイナス在庫台帳'; // ★A+Bハイブリッド: マイナス在庫永続化台帳
 
 // ── dealer_id → 発注先名 マップ ──
 const DEALER_MAP = {
@@ -29,13 +30,56 @@ function doGet(e) {
     const data = getReceiveHistoryData().slice(0, 5);
     return ContentService.createTextOutput(JSON.stringify({headers: headers, parsed: data}));
   }
-  return HtmlService.createHtmlOutputFromFile('index')
+  const template = HtmlService.createTemplateFromFile('index');
+  template.initialHistory = e && e.parameter && e.parameter.history ? e.parameter.history : '';
+  
+  return template.evaluate()
     .setTitle('薬の在庫・棚番検索')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
+// google.script.run から直接呼び出し可能なトークン更新要求関数
+function requestTokenRefreshFromUI() {
+  try {
+    PropertiesService.getScriptProperties().setProperty('TOKEN_REFRESH_REQUESTED_AT', new Date().toISOString());
+    return { success: true, message: '更新要求を登録しました' };
+  } catch(err) {
+    return { success: false, message: err.toString() };
+  }
+}
+
+/**
+ * MedOrderトークンの有効期限チェック（時間ベーストリガーから呼び出し）
+ * トークン更新日時が TOKEN_EXPIRY_HOURS 以上前の場合、daemon に更新要求を送る。
+ */
+function checkTokenExpiry() {
+  const TOKEN_EXPIRY_HOURS = 20; // 20時間以上更新がなければ要求
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const updatedAtStr = props.getProperty('MEDORDER_TOKEN_UPDATED_AT');
+    if (!updatedAtStr) {
+      // トークン未取得 → 要求を出す
+      props.setProperty('TOKEN_REFRESH_REQUESTED_AT', new Date().toISOString());
+      console.log('checkTokenExpiry: トークン未取得のため更新要求を登録しました。');
+      return;
+    }
+    const updatedAt = new Date(updatedAtStr);
+    const now = new Date();
+    const diffHours = (now.getTime() - updatedAt.getTime()) / (1000 * 60 * 60);
+    if (diffHours >= TOKEN_EXPIRY_HOURS) {
+      props.setProperty('TOKEN_REFRESH_REQUESTED_AT', now.toISOString());
+      console.log('checkTokenExpiry: トークンが ' + diffHours.toFixed(1) + '時間前に更新されたため、更新要求を登録しました。');
+    } else {
+      console.log('checkTokenExpiry: トークンは有効です（最終更新: ' + diffHours.toFixed(1) + '時間前）。');
+    }
+  } catch(err) {
+    console.error('checkTokenExpiry error: ' + err.toString());
+  }
+}
+
 function doPost(e) {
   try {
+
     const csvDataString = e.postData ? e.postData.contents : JSON.stringify(e);
 
     if (csvDataString && csvDataString.trim().startsWith('{')) {
@@ -169,6 +213,34 @@ function doPost(e) {
         return ContentService.createTextOutput(JSON.stringify({ status: 'success' }))
           .setMimeType(ContentService.MimeType.JSON);
       }
+      // ============================================
+      // ★新規追加: ENIF小分けデータの取得・更新エンドポイント
+      // ============================================
+      if (action === 'get_enif_list') {
+        const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Enif_Small_Lot');
+        if (!sheet) return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
+        const data = sheet.getDataRange().getValues();
+        const results = [];
+        if (data.length > 1) {
+          for(let i=1; i<data.length; i++){
+            results.push({ name: data[i][0], maker: data[i][1], packaging: data[i][2], jan: data[i][3] });
+          }
+        }
+        return ContentService.createTextOutput(JSON.stringify(results))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      if (action === 'enif_sync') {
+        const enifData = payload.data || [];
+        const ss = SpreadsheetApp.getActiveSpreadsheet();
+        let sheet = ss.getSheetByName('Enif_Small_Lot');
+        if (!sheet) sheet = ss.insertSheet('Enif_Small_Lot');
+        sheet.clear();
+        sheet.appendRow(['薬品名', 'メーカー', '包装', 'JAN/GS1']);
+        const rows = enifData.map(item => [item.name, item.maker, item.packaging, item.jan]);
+        if (rows.length > 0) sheet.getRange(2, 1, rows.length, 4).setValues(rows);
+        return ContentService.createTextOutput(JSON.stringify({ status: 'success' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
       if (action === 'sync_dashboard') {
         const pendingItems = payload.items || [];
         PropertiesService.getScriptProperties().setProperty('DASHBOARD_PENDING_LIST', JSON.stringify(pendingItems));
@@ -180,7 +252,80 @@ function doPost(e) {
          return ContentService.createTextOutput(JSON.stringify({})).setMimeType(ContentService.MimeType.JSON);
       }
       if (action === 'get_minus_stocks') {
-         return ContentService.createTextOutput(JSON.stringify({items: []})).setMimeType(ContentService.MimeType.JSON);
+         const mSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_MINUS_LEDGER);
+         const minusItems = [];
+         if (mSheet && mSheet.getLastRow() > 1) {
+           const data = mSheet.getDataRange().getValues();
+           for(let i=1; i<data.length; i++) {
+             minusItems.push({ 
+               name: String(data[i][0]).trim(), 
+               quantity: data[i][1], 
+               status: String(data[i][5]).trim(),
+               shelf: String(data[i][7] || '').trim() 
+             });
+           }
+         }
+         return ContentService.createTextOutput(JSON.stringify({items: minusItems})).setMimeType(ContentService.MimeType.JSON);
+      }
+      // ============================================
+      // ★A+Bハイブリッド: マイナス台帳更新 (夕方19時スキャン)
+      // ============================================
+      if (action === 'minus_ledger_update') {
+        const result = updateMinusLedger_(payload.items || []);
+        return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+      }
+      // ============================================
+      // ★A+Bハイブリッド: 朝の在庫スナップショット保存 & 差分検知
+      // ============================================
+      if (action === 'force_add_stock') {
+        const inventorySheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_INVENTORY);
+        if (!inventorySheet) return ContentService.createTextOutput(JSON.stringify({status: 'error', message: 'No inventory sheet'})).setMimeType(ContentService.MimeType.JSON);
+        
+        const invData = inventorySheet.getDataRange().getValues();
+        const headers = invData[0];
+        let nameIdx = -1, stockIdx = -1;
+        for (let i = 0; i < headers.length; i++) {
+            const h = String(headers[i]).replace(/\uFEFF/g, '').replace(/[\s\u3000]/g, '');
+            if (h.includes('薬品名') || h.includes('品名') || h.includes('商品名')) nameIdx = i;
+            if (h.includes('在庫数')) stockIdx = i;
+        }
+        
+        if (nameIdx === -1 || stockIdx === -1) {
+             return ContentService.createTextOutput(JSON.stringify({status: 'error', message: 'Headers not found'})).setMimeType(ContentService.MimeType.JSON);
+        }
+        
+        const itemsToUpdate = payload.items || [];
+        let updatedCount = 0;
+        const updates = [];
+        
+        for (const item of itemsToUpdate) {
+            const targetName = String(item.name).replace(/[\s\u3000]/g, '').toUpperCase().replace(/半角/g, '');
+            for (let j = 1; j < invData.length; j++) {
+                const invName = String(invData[j][nameIdx] || '').trim();
+                const normalizedInvName = invName.replace(/[\s\u3000]/g, '').toUpperCase().replace(/半角/g, '');
+                
+                if (normalizedInvName && (normalizedInvName.includes(targetName) || targetName.includes(normalizedInvName))) {
+                    const currentStock = parseFloat(invData[j][stockIdx]) || 0;
+                    const newStock = currentStock + parseFloat(item.qty);
+                    updates.push({ r: j + 1, c: stockIdx + 1, val: newStock });
+                    updatedCount++;
+                    break;
+                }
+            }
+        }
+        
+        if (updates.length > 0) {
+            updates.forEach(u => inventorySheet.getRange(u.r, u.c).setValue(u.val));
+            clearDataCache_(SHEET_INVENTORY);
+            PropertiesService.getScriptProperties().setProperty('LAST_UPDATED_inventory', new Date().toISOString());
+        }
+        
+        return ContentService.createTextOutput(JSON.stringify({ status: 'success', count: updatedCount })).setMimeType(ContentService.MimeType.JSON);
+      }
+
+      if (action === 'inventory_snapshot') {
+        const result = saveInventorySnapshot_(payload.names || []);
+        return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
       }
       if (action === 'search_mhlw' || action === 'searchMhlw') {
          const results = searchMhlw(payload.query || '');
@@ -198,6 +343,20 @@ function doPost(e) {
              });
          }
          return ContentService.createTextOutput(JSON.stringify({status: 'success'})).setMimeType(ContentService.MimeType.JSON);
+      }
+      if (action === 'request_token_refresh') {
+        // UIからトークン更新要求フラグを立てる
+        PropertiesService.getScriptProperties().setProperty('TOKEN_REFRESH_REQUESTED_AT', new Date().toISOString());
+        return ContentService.createTextOutput(JSON.stringify({status: 'success', message: '更新要求を登録しました'})).setMimeType(ContentService.MimeType.JSON);
+      }
+      if (action === 'poll_token_refresh') {
+        // extract_data.pyがポーリングで呼び出すエンドポイント
+        const props = PropertiesService.getScriptProperties();
+        const reqAt = props.getProperty('TOKEN_REFRESH_REQUESTED_AT');
+        if (!reqAt) return ContentService.createTextOutput(JSON.stringify({requested: false})).setMimeType(ContentService.MimeType.JSON);
+        // フラグを消去して応答
+        props.deleteProperty('TOKEN_REFRESH_REQUESTED_AT');
+        return ContentService.createTextOutput(JSON.stringify({requested: true, requestedAt: reqAt})).setMimeType(ContentService.MimeType.JSON);
       }
 
       const dataType2 = (e.parameter || {}).type || payload.type || '';
@@ -332,13 +491,14 @@ function processIncomingDeliveries(csvData) {
   if (!csvData || csvData.length < 2) return;
   
   const headers = csvData[0];
-  let dateIdx = -1, nameIdx = -1, supplierIdx = -1, qtyIdx = -1;
+  let dateIdx = -1, nameIdx = -1, supplierIdx = -1, qtyIdx = -1, rawNameIdx = -1;
   for (let i = 0; i < headers.length; i++) {
     const h = String(headers[i]).replace(/\uFEFF/g, '').replace(/[\s\u3000]/g, '');
     if (h.includes('日付') || h.includes('納品日')) dateIdx = i;
     if (h.includes('薬品名') || h.includes('商品') || h.includes('品名')) nameIdx = i;
     if (h.includes('卸') || h.includes('取引先')) supplierIdx = i;
     if (h.includes('数量')) qtyIdx = i;
+    if (h.includes('元データ名')) rawNameIdx = i;
   }
   
   if (dateIdx === -1 || nameIdx === -1 || qtyIdx === -1) return;
@@ -367,11 +527,12 @@ function processIncomingDeliveries(csvData) {
 
   const invData = inventorySheet.getDataRange().getValues();
   const invHeaders = invData[0];
-  let invNameIdx = -1, invStockIdx = -1;
+  let invNameIdx = -1, invStockIdx = -1, invUnitIdx = -1;
   for (let i = 0; i < invHeaders.length; i++) {
     const h = String(invHeaders[i]).replace(/\uFEFF/g, '').replace(/[\s\u3000]/g, '');
     if (h.includes('薬品') || h.includes('品名')) invNameIdx = i;
     if (h.includes('在庫数')) invStockIdx = i;
+    if (h.includes('単位')) invUnitIdx = i;
   }
   if (invNameIdx === -1 || invStockIdx === -1) return;
 
@@ -393,19 +554,32 @@ function processIncomingDeliveries(csvData) {
         const qty = parseFloat(qtyStr);
         if (isNaN(qty) || qty <= 0) continue;
         
+        let rawNameStr = '';
+        if (rawNameIdx !== -1) {
+          rawNameStr = String(row[rawNameIdx]).trim();
+        }
+
         // Find in inventory
         let foundRowIdx = -1;
+        let invUnit = '';
+        const normalizedNameStr = nameStr.replace(/[\s\u3000]/g, '').toUpperCase().replace(/ｶﾌﾟｾﾙ/g, 'カプセル').replace(/CAP/g, 'カプセル');
         for (let j = 1; j < invData.length; j++) {
           const invName = String(invData[j][invNameIdx] || '').trim();
-          if (invName && (invName.includes(nameStr) || nameStr.includes(invName))) {
+          const normalizedInvName = invName.replace(/[\s\u3000]/g, '').toUpperCase().replace(/ｶﾌﾟｾﾙ/g, 'カプセル').replace(/CAP/g, 'カプセル');
+          if (normalizedInvName && (normalizedInvName.includes(normalizedNameStr) || normalizedNameStr.includes(normalizedInvName))) {
             foundRowIdx = j;
+            if (invUnitIdx !== -1) invUnit = String(invData[j][invUnitIdx]).trim();
             break;
           }
         }
-        
+
+        // --- 包装単位の換算ロジック ---
+        let packAmount = 1;
+        const finalQty = qty * packAmount;
+
         if (foundRowIdx !== -1) {
           const currentStock = parseFloat(invData[foundRowIdx][invStockIdx]) || 0;
-          const newStock = currentStock + qty;
+          const newStock = currentStock + finalQty;
           updates.push({ r: foundRowIdx + 1, c: invStockIdx + 1, val: newStock });
           
           processedSet.add(deliveryId);
@@ -413,9 +587,57 @@ function processIncomingDeliveries(csvData) {
           
           invData[foundRowIdx][invStockIdx] = newStock; // update in-memory
           addedCount++;
+        } else {
+          // Looker Studioの出力(在庫シート)に存在しない品目（マイナス在庫品など）が納品された場合、
+          // 新規行として在庫シートの末尾に追加する
+          
+          // 1. マイナス在庫台帳から該当品目のマイナス値を取得して差し引き
+          let minusStock = 0;
+          if (!this.minusLedgerCache) {
+            const mSheet = ss.getSheetByName(SHEET_MINUS_LEDGER);
+            if (mSheet && mSheet.getLastRow() > 1) {
+              this.minusLedgerCache = mSheet.getDataRange().getValues();
+            } else {
+              this.minusLedgerCache = [];
+            }
+          }
+          
+          for (let m = 1; m < this.minusLedgerCache.length; m++) {
+            const mName = String(this.minusLedgerCache[m][0] || '').trim();
+            const normalizedMName = mName.replace(/[\s\u3000]/g, '').toUpperCase().replace(/ｶﾌﾟｾﾙ/g, 'カプセル').replace(/CAP/g, 'カプセル');
+            if (normalizedMName && (normalizedMName.includes(normalizedNameStr) || normalizedNameStr.includes(normalizedMName))) {
+              const mQty = parseFloat(this.minusLedgerCache[m][1]);
+              if (!isNaN(mQty) && mQty < 0) {
+                minusStock = mQty; // 例: -5 など
+              }
+              break;
+            }
+          }
+          
+          const adjustedQty = finalQty + minusStock; // マイナス値と合算（差し引き）
+          
+          const newRow = new Array(invHeaders.length).fill('');
+          newRow[invNameIdx] = nameStr;
+          newRow[invStockIdx] = adjustedQty;
+          
+          // 新規追加行の情報を記録
+          if (!this.newInventoryRows) this.newInventoryRows = [];
+          this.newInventoryRows.push(newRow);
+          
+          processedSet.add(deliveryId);
+          newProcessedIds.push([deliveryId, now.toISOString()]);
+          
+          invData.push(newRow); // update in-memory
+          addedCount++;
         }
       }
     }
+  }
+
+  // 新規追加行があれば在庫シートに一括追記
+  if (this.newInventoryRows && this.newInventoryRows.length > 0) {
+    inventorySheet.getRange(inventorySheet.getLastRow() + 1, 1, this.newInventoryRows.length, invHeaders.length).setValues(this.newInventoryRows);
+    this.newInventoryRows = [];
   }
 
   if (updates.length > 0) {
@@ -730,6 +952,19 @@ function processNsipsSync(mode, items) {
 // ----------------------------------------------------------------------
 // ↓↓↓ 以下の関数はユーザー様からご提供いただいた既存の関数をそのまま保持 ↓↓↓
 // ----------------------------------------------------------------------
+
+function get_enif_list() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Enif_Small_Lot');
+  if (!sheet) return [];
+  const data = sheet.getDataRange().getValues();
+  const results = [];
+  if (data.length > 1) {
+    for(let i=1; i<data.length; i++){
+      results.push({ name: data[i][0], maker: data[i][1], packaging: data[i][2], jan: data[i][3] });
+    }
+  }
+  return results;
+}
 
 function getLastUpdated() {
   const val = PropertiesService.getScriptProperties().getProperty('LAST_UPDATED');
@@ -1154,6 +1389,7 @@ function getGenericSheetData(sheetName) {
 
   let nameColIdx = -1, stockColIdx = -1, shelfColIdx = -1;
   let unitColIdx = -1, priceColIdx = -1, stockValueColIdx = -1;
+  let lotColIdx = -1, supplierColIdx = -1, lastPurchaseDateColIdx = -1;
 
   for (let i = 0; i < headers.length; i++) {
     const header = String(headers[i]).replace(/\uFEFF/g, '').replace(/[\s\u3000]/g, '');
@@ -1163,6 +1399,9 @@ function getGenericSheetData(sheetName) {
     if (header === '単位' || header.includes('単位')) unitColIdx = i;
     if (header === '薬価') priceColIdx = i;
     if (header === '在庫金額') stockValueColIdx = i;
+    if (header.toUpperCase().includes('LOT') || header.includes('ロット')) lotColIdx = i;
+    if (header.includes('卸') || header.includes('納品卸') || header.includes('発注先') || header.includes('取引先') || header.includes('入庫先') || header.includes('納入元') || header.includes('業者') || header.includes('仕入先') || header.includes('購入先')) supplierColIdx = i;
+    if (header.includes('購入日') || header.includes('納品日') || header.includes('最終購入')) lastPurchaseDateColIdx = i;
   }
 
   if (nameColIdx === -1) return [];
@@ -1176,13 +1415,26 @@ function getGenericSheetData(sheetName) {
     const price = parseFloat(rawPrice.replace(/[^\d.]/g, '')) || 0;
     const rawStockValue = stockValueColIdx !== -1 ? String(row[stockValueColIdx] || '') : '';
     const stockValue = parseFloat(rawStockValue.replace(/[^\d.]/g, '')) || 0;
+    
+    let lastPurchaseDate = '';
+    if (lastPurchaseDateColIdx !== -1 && row[lastPurchaseDateColIdx]) {
+      if (row[lastPurchaseDateColIdx] instanceof Date) {
+        lastPurchaseDate = Utilities.formatDate(row[lastPurchaseDateColIdx], 'JST', 'yyyy/MM/dd');
+      } else {
+        lastPurchaseDate = String(row[lastPurchaseDateColIdx]).replace(/^'/, '');
+      }
+    }
+
     results.push({
       name: medicineName,
       stock: stockColIdx !== -1 ? row[stockColIdx] : '不明',
       shelf: shelfColIdx !== -1 ? row[shelfColIdx] : '不明',
       unit: unitColIdx !== -1 ? String(row[unitColIdx] || '') : '個',
       price, priceStr: rawPrice,
-      stockValue, stockValueStr: rawStockValue
+      stockValue, stockValueStr: rawStockValue,
+      lot: lotColIdx !== -1 ? String(row[lotColIdx] || '') : '',
+      supplier: supplierColIdx !== -1 ? String(row[supplierColIdx] || '') : '',
+      lastPurchaseDate: lastPurchaseDate
     });
   }
   return results;
@@ -1781,7 +2033,10 @@ function rebuildNameMapViaMasterApi() {
 function checkNegativeStockAndNotify() {
   const props = PropertiesService.getScriptProperties();
   const token = props.getProperty('MEDORDER_TOKEN');
-  const alertEmail = props.getProperty('ALERT_EMAIL') || 'masamitting@gmail.com';
+  let alertEmail = props.getProperty('ALERT_EMAIL') || 'masamitting@gmail.com';
+  if (!alertEmail.includes('maruyama.pharmacy@gmail.com')) {
+    alertEmail += ',maruyama.pharmacy@gmail.com';
+  }
 
   const results = { minusItems: [], dashboardItems: [] };
 
@@ -1832,7 +2087,9 @@ function checkNegativeStockAndNotify() {
 
   // 2. ダッシュボード未納・未定チェック
   const dashboardJson = props.getProperty('DASHBOARD_PENDING_LIST') || '[]';
-  results.dashboardItems = JSON.parse(dashboardJson).sort();
+  const allDashboardItems = JSON.parse(dashboardJson).sort();
+  // 「出荷調整」または「出荷停止」を含むものだけを通知対象とする
+  results.dashboardItems = allDashboardItems.filter(item => item.includes('出荷調整') || item.includes('出荷停止'));
 
   // 3. 通知判定
   if (results.minusItems.length === 0 && results.dashboardItems.length === 0) {
@@ -1954,20 +2211,26 @@ function notifyNewPendingItems_(sheet, newData) {
   for (let i = 1; i < newData.length; i++) {
     const name = String(newData[i][1]).trim();
     const supplier = String(newData[i][2]).trim();
+    const status = String(newData[i][3]).trim();
     if (name && supplier && !oldSet.has(name + '|' + supplier)) {
-      newItems.push({
-        date: newData[i][0],
-        name: name,
-        supplier: supplier,
-        status: newData[i][3],
-        qty: newData[i][4]
-      });
+      if (status.includes('出荷調整') || status.includes('出荷停止')) {
+        newItems.push({
+          date: newData[i][0],
+          name: name,
+          supplier: supplier,
+          status: status,
+          qty: newData[i][4]
+        });
+      }
     }
   }
 
   if (newItems.length > 0) {
     const props = PropertiesService.getScriptProperties();
-    const alertEmail = props.getProperty('ALERT_EMAIL') || 'masamitting@gmail.com';
+    let alertEmail = props.getProperty('ALERT_EMAIL') || 'masamitting@gmail.com';
+    if (!alertEmail.includes('maruyama.pharmacy@gmail.com')) {
+      alertEmail += ',maruyama.pharmacy@gmail.com';
+    }
     
     const subject = "【在庫アプリ】未納未定の新規追加通知 (" + newItems.length + "件)";
     let body = "以下の商品が未納未定リストに新規追加されました。\n\n";
@@ -1991,4 +2254,359 @@ function notifyNewPendingItems_(sheet, newData) {
     });
     console.log('New pending items notification sent: ' + newItems.length + ' items');
   }
+}
+
+
+// ======================================================================
+// ★A+Bハイブリッド: マイナス在庫台帳 操作関数群
+// SHEET_MINUS_LEDGER = 'マイナス在庫台帳'
+// 列: 品目名 | 数量 | 初回検知日 | 最終更新日 | 検知方法 | ステータス | 継続日数 | メモ
+// ステータス: 要確認 / 確認済みマイナス / 復旧候補
+// ======================================================================
+
+/**
+ * [夕方19時] extract_data.py --minus-scan から呼ばれる
+ * MedOrder API でスキャンしたマイナス品目リストで台帳を更新する
+ * @param {Array} items [{name, quantity, itemId}]
+ */
+function updateMinusLedger_(items) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_MINUS_LEDGER);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_MINUS_LEDGER);
+    sheet.appendRow(['品目名','数量','初回検知日','最終更新日','検知方法','ステータス','継続日数','メモ']);
+    sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, 8).setBackground('#1e3a5f').setFontColor('#ffffff').setFontWeight('bold');
+  }
+
+  const now = new Date();
+  const jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const nowStr  = Utilities.formatDate(jstNow, 'UTC', 'yyyy/MM/dd HH:mm');
+  const todayStr = Utilities.formatDate(jstNow, 'UTC', 'yyyy/MM/dd');
+
+  // ─────── 1. 台帳を一括読み込み ───────
+  const lastRow = sheet.getLastRow();
+  let existingData = []; // rows (0-indexed, ヘッダー除く)
+  if (lastRow > 1) {
+    existingData = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+  }
+
+  // name → インデックスマップ
+  const nameToIdx = {};
+  existingData.forEach((row, i) => {
+    const n = String(row[0]).trim();
+    if (n) nameToIdx[n] = i;
+  });
+
+  const incomingNames = new Set((items || []).map(it => String(it.name || '').trim()).filter(n => n));
+
+  // ─────── 2. 既存行の更新・復旧判定（配列上で完結） ───────
+  existingData.forEach((row, i) => {
+    const name   = String(row[0]).trim();
+    const status = String(row[5]).trim();
+    const memo   = String(row[7]).trim();
+    if (!name) return;
+
+    if (incomingNames.has(name)) {
+      // 今回スキャンで確認 → 数量・更新・ステータス更新
+      const matchingItem = (items || []).find(it => String(it.name || '').trim() === name);
+      const qty = matchingItem ? Number(matchingItem.quantity || 0) : row[1];
+      const firstDate = row[2] ? new Date(String(row[2]).replace(/\//g, '-')) : now;
+      const diffDays  = Math.max(0, Math.floor((now - firstDate) / (1000 * 60 * 60 * 24)));
+      existingData[i][1] = qty;
+      existingData[i][3] = nowStr;
+      existingData[i][4] = '夕スキャン';
+      existingData[i][5] = '確認済みマイナス';
+      existingData[i][6] = diffDays;
+    } else {
+      // 今回スキャンに含まれない
+      if (status === '確認済みマイナス') {
+        existingData[i][3] = nowStr;
+        existingData[i][5] = '復旧確認済み';
+      } else if (status === '要確認' && !memo) {
+        existingData[i][0] = '__DELETE__'; // 削除フラグ
+      }
+    }
+  });
+
+  // ─────── 3. 新規品目を追加 ───────
+  const newRows = [];
+  (items || []).forEach(it => {
+    const name = String(it.name || '').trim();
+    if (!name || nameToIdx[name] !== undefined) return; // 既存品目はスキップ
+    const qty = Number(it.quantity || 0);
+    newRows.push([name, qty, todayStr, nowStr, '夕スキャン', '確認済みマイナス', 0, '']);
+  });
+
+  // ─────── 4. 入庫照合（本日入庫があれば復旧確認済み） ───────
+  try {
+    const recData = getReceiveHistoryData();
+    const todayMD = Utilities.formatDate(jstNow, 'UTC', 'MM/dd');
+    const todayReceived = new Set(
+      recData.filter(r => String(r.receiveDate || '').includes(todayMD))
+             .map(r => String(r.name || '').trim())
+    );
+    if (todayReceived.size > 0) {
+      existingData.forEach((row, i) => {
+        const name   = String(row[0]).trim();
+        const status = String(row[5]).trim();
+        if (!name || name === '__DELETE__' || status.startsWith('復旧確認済み')) return;
+        let matched = todayReceived.has(name);
+        if (!matched) {
+          todayReceived.forEach(rn => {
+            if (rn.includes(name.substring(0, 8)) || name.includes(rn.substring(0, 8))) matched = true;
+          });
+        }
+        if (matched) {
+          existingData[i][3] = nowStr;
+          existingData[i][5] = '復旧確認済み（入庫）';
+        }
+      });
+    }
+  } catch(e) {
+    console.error('入庫照合エラー: ' + e);
+  }
+
+  // ─────── 5. 削除フラグ行を除外した最終データを構築 ───────
+  const finalRows = existingData.filter(row => String(row[0]).trim() !== '__DELETE__');
+  newRows.forEach(r => finalRows.push(r));
+
+  // ─────── 6. シートを一括書き込み（setValues 1回） ───────
+  // ヘッダー行(1行目)は保持、データ行(2行目以降)を完全置換
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, 8).clearContent(); // 既存データ消去
+  }
+  if (finalRows.length > 0) {
+    sheet.getRange(2, 1, finalRows.length, 8).setValues(finalRows);
+  }
+
+  // ─────── 7. 色付け（setBackgrounds 一括） ───────
+  if (finalRows.length > 0) {
+    const bgColors = finalRows.map(row => {
+      const status = String(row[5]).trim();
+      let color = '#ffffff';
+      if (status === '要確認')              color = '#fef9c3';
+      else if (status === '確認済みマイナス') color = '#fee2e2';
+      else if (status.startsWith('復旧'))    color = '#dcfce7';
+      return Array(8).fill(color);
+    });
+    sheet.getRange(2, 1, finalRows.length, 8).setBackgrounds(bgColors);
+  }
+
+  PropertiesService.getScriptProperties().setProperty('LAST_UPDATED_minus_ledger', nowStr);
+  return { status: 'success', message: `台帳更新完了 (${finalRows.length}件)`, updatedAt: nowStr };
+}
+
+
+/**
+ * [朝] Looker Studio CSV送信後に呼ばれる
+ * 今日の品目名リストを保存し、昨日リストと差分検知 → 消えた品目を「要確認」として台帳登録
+ * @param {Array<string>} names 今日のLooker Studio在庫品目名リスト
+ * @returns {{missingItems: string[], savedCount: number}}
+ */
+function saveInventorySnapshot_(names) {
+  const props = PropertiesService.getScriptProperties();
+  const jstNow = new Date(new Date().getTime() + 9 * 60 * 60 * 1000);
+  const todayStr = Utilities.formatDate(jstNow, 'UTC', 'yyyy/MM/dd');
+  const nowStr   = Utilities.formatDate(jstNow, 'UTC', 'yyyy/MM/dd HH:mm');
+
+  // 昨日のスナップショットを取得
+  const prevSnapshot = props.getProperty('INVENTORY_SNAPSHOT_PREV');
+  const prevDate     = props.getProperty('INVENTORY_SNAPSHOT_DATE');
+
+  // 今日のリストを保存（圧縮: 品目名をJSON配列で保存）
+  const nameList = (names || []).map(n => String(n).trim()).filter(n => n);
+  props.setProperty('INVENTORY_SNAPSHOT_PREV', JSON.stringify(nameList));
+  props.setProperty('INVENTORY_SNAPSHOT_DATE', todayStr);
+
+  // 初回実行（昨日データなし）→ 差分検知スキップ
+  if (!prevSnapshot || prevDate === todayStr) {
+    return { missingItems: [], savedCount: nameList.length, note: '初回またはすでに本日実行済み' };
+  }
+
+  let prevNames;
+  try { prevNames = JSON.parse(prevSnapshot); } catch(e) { prevNames = []; }
+
+  const todaySet = new Set(nameList);
+  const missingItems = prevNames.filter(n => !todaySet.has(n));
+
+  if (missingItems.length === 0) {
+    return { missingItems: [], savedCount: nameList.length };
+  }
+
+  // 消えた品目を台帳に「要確認」として登録
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_MINUS_LEDGER);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_MINUS_LEDGER);
+    sheet.appendRow(['品目名','数量','初回検知日','最終更新日','検知方法','ステータス','継続日数','メモ']);
+    sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, 8).setBackground('#1e3a5f').setFontColor('#ffffff').setFontWeight('bold');
+  }
+
+  // 既存の台帳品目を取得
+  const lastRow = sheet.getLastRow();
+  const existingNames = new Set();
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, 1).getValues().forEach(r => {
+      const n = String(r[0]).trim();
+      if (n) existingNames.add(n);
+    });
+  }
+
+  // 未登録のみ追加
+  const newRows = missingItems
+    .filter(n => !existingNames.has(n))
+    .map(n => [n, '（不明）', todayStr, nowStr, '朝差分', '要確認', 0, '']);
+
+  if (newRows.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 8).setValues(newRows);
+    // 黄色で着色
+    sheet.getRange(sheet.getLastRow() - newRows.length + 1, 1, newRows.length, 8).setBackground('#fef9c3');
+  }
+
+  return { missingItems, savedCount: nameList.length, newLedgerEntries: newRows.length };
+}
+
+
+/**
+ * getMinusStocks: 台帳優先、取得失敗時はMedOrder API直接フォールバック
+ * ダッシュボードから google.script.run.getMinusStocks() で呼ばれる
+ */
+function getMinusStocks() {
+  // 1. 台帳が存在すれば台帳データを優先返却
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ledgerSheet = ss.getSheetByName(SHEET_MINUS_LEDGER);
+  if (ledgerSheet && ledgerSheet.getLastRow() > 1) {
+    const data = ledgerSheet.getRange(2, 1, ledgerSheet.getLastRow() - 1, 8).getValues();
+    const props = PropertiesService.getScriptProperties();
+    const ledgerUpdatedAt = props.getProperty('LAST_UPDATED_minus_ledger') || '';
+    const items = data
+      .filter(row => String(row[0]).trim() && String(row[5]).trim() !== '復旧確認済み（入庫）' && !String(row[5]).includes('復旧確認済み'))
+      .map(row => ({
+        name:         String(row[0]).trim(),
+        quantity:     row[1],
+        firstDetected:String(row[2]).trim(),
+        lastUpdated:  String(row[3]).trim(),
+        method:       String(row[4]).trim(),
+        status:       String(row[5]).trim(),
+        days:         Number(row[6]) || 0,
+        memo:         String(row[7]).trim(),
+        isOrdered:    false, // ダッシュボード側で発注履歴と突合
+      }));
+    return { items, ledgerUpdatedAt, source: 'ledger' };
+  }
+
+  // 2. 台帳がない場合はMedOrder API直接呼び出し（既存ロジック継続）
+  const propsF = PropertiesService.getScriptProperties();
+  const token = propsF.getProperty('MEDORDER_TOKEN');
+  if (!token) return { error: 'トークン未設定。extract_data.pyを実行してください。', items: [] };
+
+  const baseUrl = 'https://medorder-api.pharmacloud.jp/api/v2/pharmacy/pharmacies/20/stocks?items=500&page=';
+  const options = {
+    method: 'GET',
+    headers: {
+      'Authorization': 'Bearer ' + token,
+      'Accept': 'application/json',
+      'Origin': 'https://app.medorder.jp',
+      'Referer': 'https://app.medorder.jp/'
+    },
+    muteHttpExceptions: true
+  };
+
+  try {
+    const res1 = UrlFetchApp.fetch(baseUrl + '1', options);
+    if (res1.getResponseCode() === 401) return { error: 'トークンが期限切れです。extract_data.pyを再実行してください.', items: [] };
+    if (res1.getResponseCode() !== 200) return { error: 'APIエラー: ' + res1.getResponseCode(), items: [] };
+
+    const headers1 = res1.getHeaders();
+    const totalPages = Number(headers1['x-total-pages'] || headers1['X-Total-Pages'] || 1);
+    const allData = JSON.parse(res1.getContentText());
+
+    for (let p = 2; p <= totalPages; p++) {
+      const res = UrlFetchApp.fetch(baseUrl + p, options);
+      if (res.getResponseCode() === 200) {
+        JSON.parse(res.getContentText()).forEach(item => allData.push(item));
+      }
+      Utilities.sleep(200);
+    }
+
+    const nameMap = getNameMap_();
+    const recentOrderedIds = getRecentOrderedItemIds_(token, 7);
+    const recentEpiOrders = getRecentEpiOrderedNames_(7);
+    const collaboHistoryDates = getCollaboHistoryDates_(7);
+    const epiDeliveryMap = getEpiDeliveryDates_();
+
+    const minusItems = allData
+      .filter(stock => (stock.quantity || 0) < 0)
+      .map(stock => {
+        const item = mapStockItem_(stock, nameMap);
+        const orderedViaMedOrder = recentOrderedIds.has(item.stockable_item_id);
+        const normalizedItemName = normalizeText(item.name);
+        const shortItem = normalizedItemName.substring(0, 8);
+        let deliveryDate = '';
+
+        const orderedViaEpi = recentEpiOrders.some(epiOrder => {
+          const normalizedEpiName = normalizeText(epiOrder.name);
+          if (!normalizedItemName || !normalizedEpiName) return false;
+          const shortEpi  = normalizedEpiName.substring(0, 8);
+          const isMatch = shortItem === shortEpi
+              || normalizedItemName.includes(normalizedEpiName)
+              || normalizedEpiName.includes(normalizedItemName);
+          if (isMatch && !deliveryDate) deliveryDate = epiOrder.deliveryDate || '';
+          return isMatch;
+        });
+
+        if (orderedViaEpi && !deliveryDate) {
+          for (const [epiNorm, epiDate] of Object.entries(epiDeliveryMap)) {
+            const shortEpiDel = epiNorm.substring(0, 8);
+            if (shortItem === shortEpiDel || normalizedItemName.includes(epiNorm) || epiNorm.includes(normalizedItemName)) {
+              deliveryDate = epiDate;
+              break;
+            }
+          }
+        }
+
+        let orderedViaCollabo = false;
+        if (!deliveryDate || deliveryDate === '取得前') {
+          orderedViaCollabo = collaboHistoryDates.some(pdItem => {
+            const normalizedPdName = normalizeText(pdItem.name);
+            if (!normalizedItemName || !normalizedPdName) return false;
+            const shortPd = normalizedPdName.substring(0, 8);
+            const isMatch = shortItem === shortPd || normalizedItemName.includes(normalizedPdName) || normalizedPdName.includes(normalizedItemName);
+            if (isMatch) deliveryDate = pdItem.deliveryDate || '';
+            return isMatch;
+          });
+        }
+
+        item.isOrdered = orderedViaMedOrder || orderedViaEpi || orderedViaCollabo;
+        if (orderedViaEpi) item.orderSource = 'OrderEPI';
+        else if (orderedViaCollabo) item.orderSource = 'Collabo Portal';
+        else if (orderedViaMedOrder) item.orderSource = 'MedOrder';
+        else item.orderSource = '';
+
+        item.deliveryDate = deliveryDate;
+        // 台帳互換フィールド追加
+        item.status = 'リアルタイム取得';
+        item.days = 0;
+        item.method = 'API直接';
+        return item;
+      })
+      .sort((a, b) => {
+        if (a.isOrdered !== b.isOrdered) return a.isOrdered ? 1 : -1;
+        return a.quantity - b.quantity;
+      });
+
+    return { items: minusItems, source: 'api' };
+  } catch(e) {
+    return { error: e.toString(), items: [] };
+  }
+}
+
+/**
+ * ダミーのkeepWarm関数
+ * 5分ごとのトリガーが残存している場合のエラーを回避するための関数です。
+ */
+function keepWarm() {
+  console.log('keepWarm: dummy function executed.');
 }

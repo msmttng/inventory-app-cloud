@@ -32,6 +32,12 @@
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.65} }
     .minus-unordered-pulse { animation: unorderedPulse 2.5s ease-in-out infinite; }
     @keyframes unorderedPulse { 0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(239,68,68,0.3)} 50%{opacity:.8;box-shadow:0 0 0 4px rgba(239,68,68,0)} }
+    /* ── 速報バッジ ── */
+    .sokuho-box { background: linear-gradient(135deg,#eff6ff,#f0fdf4); border-color:#6ee7b7 !important; }
+    .sokuho-strikethrough { text-decoration: line-through; opacity: 0.45; }
+    .sokuho-badge { background: linear-gradient(90deg,#6366f1,#06b6d4); color:#fff; font-size:9px; font-weight:800; border-radius:4px; padding:1px 5px; letter-spacing:0.04em; }
+    @keyframes sokuhoFade { 0%,100%{opacity:1} 50%{opacity:.7} }
+    .sokuho-pulse { animation: sokuhoFade 2.5s ease-in-out infinite; }
     input[type=range] {
       -webkit-appearance:none; appearance:none;
       width:100%; height:4px; border-radius:4px;
@@ -309,10 +315,23 @@
                   </div>
                 </div>
                 <div class="shrink-0 flex items-start">
-                  <div class="rounded-lg p-2 sm:p-3 min-w-[70px] sm:min-w-[90px] text-center border transition-colors flex flex-col justify-center" :class="item.isNotRegistered?'bg-red-50 border-red-200':isLowStock(item.stock)?'bg-amber-50 border-amber-200':'bg-gray-50 border-gray-100'">
-                    <div class="text-[10px] sm:text-xs font-medium mb-1" :class="item.isNotRegistered?'text-red-500':isLowStock(item.stock)?'text-amber-600':'text-gray-500'"><i class="fa-solid fa-cubes mr-1" :class="item.isNotRegistered?'text-red-400':isLowStock(item.stock)?'text-amber-400':'text-gray-400'"></i>在庫数</div>
-                    <div class="text-xl sm:text-2xl font-bold" :class="item.isNotRegistered?'text-red-600':isLowStock(item.stock)?'text-amber-600':'text-gray-800'">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
-                    <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                  <div class="rounded-lg p-2 sm:p-3 min-w-[70px] sm:min-w-[90px] text-center border transition-colors flex flex-col justify-center" :class="item.isNotRegistered?'bg-red-50 border-red-200':item.sokuhoQty?'sokuho-box border-emerald-200':isLowStock(item.stock)?'bg-amber-50 border-amber-200':'bg-gray-50 border-gray-100'">
+                    <div class="text-[10px] sm:text-xs font-medium mb-1" :class="item.isNotRegistered?'text-red-500':isLowStock(item.stock)?'text-amber-600':'text-gray-500'">
+                      <i class="fa-solid fa-cubes mr-1" :class="item.isNotRegistered?'text-red-400':isLowStock(item.stock)?'text-amber-400':'text-gray-400'"></i>在庫数
+                    </div>
+                    <!-- 速報あり: 打消し線旧在庫 → 矢印 → 新在庫 -->
+                    <template v-if="item.sokuhoQty">
+                      <div class="text-[11px] font-bold text-gray-400 sokuho-strikethrough leading-none">{{ item.sokuhoBaseStock }}</div>
+                      <div class="text-[10px] text-indigo-400 font-bold my-0.5">↓</div>
+                      <div class="text-xl sm:text-2xl font-bold text-indigo-700">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
+                      <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                      <div class="mt-1 sokuho-pulse"><span class="sokuho-badge"><i class="fa-solid fa-truck-fast mr-0.5"></i>速報+{{ item.sokuhoQty }}</span></div>
+                    </template>
+                    <!-- 通常表示 -->
+                    <template v-else>
+                      <div class="text-xl sm:text-2xl font-bold" :class="item.isNotRegistered?'text-red-600':isLowStock(item.stock)?'text-amber-600':'text-gray-800'">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
+                      <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                    </template>
                   </div>
                 </div>
               </div>
@@ -371,10 +390,19 @@
                     </div>
                   </div>
                   <div class="shrink-0 flex items-start">
-                    <div class="rounded-lg p-2 min-w-[65px] sm:min-w-[80px] text-center border transition-colors flex flex-col justify-center" :class="item.isNotRegistered?'bg-red-50 border-red-200':isLowStock(item.stock)?'bg-amber-50 border-amber-200':'bg-white border-gray-100'">
+                    <div class="rounded-lg p-2 min-w-[65px] sm:min-w-[80px] text-center border transition-colors flex flex-col justify-center" :class="item.isNotRegistered?'bg-red-50 border-red-200':item.sokuhoQty?'sokuho-box border-emerald-200':isLowStock(item.stock)?'bg-amber-50 border-amber-200':'bg-white border-gray-100'">
                       <div class="text-[10px] font-medium mb-0.5" :class="item.isNotRegistered?'text-red-500':isLowStock(item.stock)?'text-amber-600':'text-gray-500'">在庫</div>
-                      <div class="text-lg sm:text-xl font-bold" :class="item.isNotRegistered?'text-red-600':isLowStock(item.stock)?'text-amber-600':'text-gray-800'">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
-                      <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                      <template v-if="item.sokuhoQty">
+                        <div class="text-[10px] font-bold text-gray-400 sokuho-strikethrough leading-none">{{ item.sokuhoBaseStock }}</div>
+                        <div class="text-[9px] text-indigo-400 font-bold">↓</div>
+                        <div class="text-lg sm:text-xl font-bold text-indigo-700">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
+                        <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                        <div class="mt-0.5 sokuho-pulse"><span class="sokuho-badge"><i class="fa-solid fa-truck-fast mr-0.5"></i>速報+{{ item.sokuhoQty }}</span></div>
+                      </template>
+                      <template v-else>
+                        <div class="text-lg sm:text-xl font-bold" :class="item.isNotRegistered?'text-red-600':isLowStock(item.stock)?'text-amber-600':'text-gray-800'">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
+                        <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                      </template>
                     </div>
                   </div>
                 </div>
@@ -1189,7 +1217,7 @@
           <p class="text-sm text-gray-600 mb-4 font-semibold">{{ adjustModalItem?.name }}</p>
           <div class="mb-4">
             <label class="block text-xs font-bold text-gray-500 mb-1">現在のシステム在庫</label>
-            <div class="text-lg font-bold text-gray-800 bg-gray-100 p-2 rounded text-center">{{ adjustModalItem?.stock }}</div>
+            <div class="text-lg font-bold text-gray-800 bg-gray-100 p-2 rounded text-center">{{ adjustModalItem?.stock !== undefined ? adjustModalItem.stock : adjustModalItem?.quantity }}</div>
           </div>
           <div class="mb-4">
             <label class="block text-xs font-bold text-gray-500 mb-1">実際の棚の数 (実在庫)</label>
@@ -1282,6 +1310,73 @@
 </div>
 
 <script>
+// ==========================================
+// ★ GitHub Pages 用の GAS 互換プロキシ層 ★
+// GAS以外の環境で google.script.run が存在しない場合、自動的に
+// GAS Web App へ POST(fetch) して同等の動作を実現します。
+// ==========================================
+if (typeof google === 'undefined') {
+  window.google = { script: { run: {} } };
+  
+  // clasp deployments の最新のWeb App URL
+  const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwp7WfGg5Md1-or1ihfVPH_KuMBQw41BVnUzR9iACTv0m8iG2DpLcnW-0Ui2zBFrTJWUg/exec';
+
+  const buildRun = (successHandler, failureHandler) => {
+    return new Proxy({}, {
+      get(target, prop) {
+        if (prop === 'withSuccessHandler') return (fn) => buildRun(fn, failureHandler);
+        if (prop === 'withFailureHandler') return (fn) => buildRun(successHandler, fn);
+        if (prop === 'withUserObject') return () => buildRun(successHandler, failureHandler); // 未使用だが一応
+        
+        return (...args) => {
+          let action = prop;
+          if (prop === 'getShelfSummary') action = 'summary';
+          if (prop === 'getReturnData') action = 'return';
+          if (prop === 'getDeadData') action = 'dead';
+          if (prop === 'getLiveStocks') action = 'live';
+          if (prop === 'getPendingDeliveries') action = 'pending_deliveries';
+          if (prop === 'getReceiveHistoryData') action = 'receive_history';
+          if (prop === 'getOrderHistory') action = 'history';
+          if (prop === 'getMinusStocks') action = 'get_minus_stocks';
+          if (prop === 'getExpiryData') action = 'expiry';
+          if (prop === 'requestTokenRefreshFromUI') action = 'request_token_refresh';
+          if (prop === 'getLastUpdated') action = 'lastUpdated';
+          if (prop === 'getAllLastUpdated') action = 'allLastUpdated';
+          
+          let payload = { action: action };
+          if (prop === 'getLiveStocks' && args.length > 0) payload.page = args[0];
+          if (prop === 'saveMemo' && args.length > 1) { payload.name = args[0]; payload.memo = args[1]; }
+          if (prop === 'deleteMemo' && args.length > 0) payload.name = args[0];
+          
+          fetch(GAS_WEB_APP_URL, {
+            method: 'POST',
+            body: JSON.stringify(payload),
+            headers: { 'Content-Type': 'text/plain' }
+          })
+          .then(res => res.json())
+          .then(data => { if (successHandler) successHandler(data); })
+          .catch(err => {
+            console.error('GAS Proxy Error:', err);
+            if (failureHandler) failureHandler(err);
+          });
+        };
+      }
+    });
+  };
+  
+  window.google.script.run = buildRun(null, null);
+  
+  // URL解析用のモック (必要最低限)
+  window.google.script.url = {
+    getLocation: (callback) => {
+      const params = new URLSearchParams(window.location.search);
+      let pObj = {};
+      for(let [k,v] of params) pObj[k] = v;
+      callback({ parameter: pObj });
+    }
+  };
+}
+
 const { createApp, ref, computed, onMounted } = Vue;
 createApp({
   setup() {
@@ -1316,7 +1411,8 @@ createApp({
     
     const openAdjustModal = (item) => {
       adjustModalItem.value = item;
-      adjustStockValue.value = String(item.stock).replace(/,/g, '');
+      const stockVal = item.stock !== undefined ? item.stock : (item.quantity !== undefined ? item.quantity : 0);
+      adjustStockValue.value = String(stockVal).replace(/,/g, '');
       adjustModalOpen.value = true;
     };
     
@@ -1363,6 +1459,7 @@ createApp({
         
         // Update local state
         item.stock = newStock;
+        if (item.quantity !== undefined) item.quantity = newStock;
         adjustModalOpen.value = false;
         alert('在庫を調整しました！');
       } catch (err) {
@@ -1609,6 +1706,7 @@ createApp({
     const convertEyedrop = (stock, oldestStock, unit, name) => {
       const stockNum = parseFloat(stock);
       const u = String(unit||'').trim();
+      if (isNaN(stockNum)) return { displayStock: '-', displayUnit: u || '不明' };
       if (u === '瓶') return { displayStock: String(stock), displayUnit: '瓶' };
       const volFromOldest = extractBottleVol(oldestStock);
       if (volFromOldest && volFromOldest > 0) {
@@ -1935,6 +2033,38 @@ createApp({
           });
         }
         applyTypeCorrection(finalResults);
+
+        // ── 速報データを取得して付与 ──
+        try {
+          const today = new Date().toISOString().slice(0, 10);
+          const todayStart = `${today}T00:00:00+09:00`;
+          const sokuhoRes = await fetch(
+            `${supaUrl}/transaction_history?transaction_type=eq.%E7%B4%8D%E5%93%81(%E9%80%9F%E5%A0%B1)&transaction_date=gte.${encodeURIComponent(todayStart)}&select=name,yj_code,qty_in,stock_balance`,
+            {headers: supaHeaders}
+          );
+          if (sokuhoRes.ok) {
+            const sokuhoData = await sokuhoRes.json();
+            // 品名→最新速報レコード のマップ
+            const sokuhoMap = {};
+            sokuhoData.forEach(s => {
+              if (s.yj_code && !sokuhoMap[s.yj_code]) sokuhoMap[s.yj_code] = s;
+              if (s.name && !sokuhoMap[s.name]) sokuhoMap[s.name] = s;
+            });
+            finalResults.forEach(r => {
+              const hit = (r.yj_code && sokuhoMap[r.yj_code]) ? sokuhoMap[r.yj_code] : sokuhoMap[r.name];
+              if (hit && parseFloat(hit.qty_in) > 0) {
+                r.sokuhoQty = hit.qty_in;  // 速報加算量
+                // 速報前の在庫 = 現在stock - 速報加算量
+                const currentStock = parseFloat(r.stock);
+                if (!isNaN(currentStock)) {
+                  const base = currentStock - parseFloat(hit.qty_in);
+                  r.sokuhoBaseStock = Number.isInteger(base) ? base : Math.round(base * 100) / 100;
+                }
+              }
+            });
+          }
+        } catch(e) { console.warn('速報データ取得失敗', e); }
+
         results.value = finalResults;
       } catch(e) {
         errorMsg.value = '検索中にエラー: ' + e;
