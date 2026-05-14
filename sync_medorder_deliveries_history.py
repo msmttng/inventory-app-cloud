@@ -1,3 +1,10 @@
+import sys
+import io
+if sys.stdout is not None:
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+if sys.stderr is not None:
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 from dotenv import load_dotenv
 load_dotenv()
 import asyncio
@@ -90,6 +97,7 @@ async def get_medorder_deliveries(browser):
                                         }
 
                 gas_csv_rows = ["納品日,薬品名,取引先,数量,元データ名"]
+                local_updated_stocks = {}
                 for record in data:
                     delivery_date = record.get('slipped_on', '')
                     # Only process today's deliveries
@@ -102,21 +110,39 @@ async def get_medorder_deliveries(browser):
                         yj_code = m_info.get('yj_code') or ""
                         
                         # Fetch current stock and unit
-                        stock_balance = 0
-                        inv_unit = ''
+                        if name in local_updated_stocks:
+                            stock_balance = local_updated_stocks[name]
+                            inv_unit = ''
+                        else:
+                            stock_balance = 0
+                            inv_unit = ''
                         try:
+                            found_in_inventory = False
                             if yj_code:
                                 s_req = requests.get(f"{SUPA_URL}/inventory?yj_code=eq.{yj_code}&select=stock,unit", headers={'apikey': SUPA_KEY, 'Authorization': f'Bearer {SUPA_KEY}'})
-                            else:
-                                import urllib.parse
+                                if s_req.status_code == 200 and len(s_req.json()) > 0:
+                                    stock_balance = float(str(s_req.json()[0].get('stock', '0')).replace(',', ''))
+                                    inv_unit = str(s_req.json()[0].get('unit', ''))
+                                    found_in_inventory = True
+                            
+                            if not found_in_inventory:
                                 enc_name = urllib.parse.quote(name)
                                 s_req = requests.get(f"{SUPA_URL}/inventory?name=eq.{enc_name}&select=yj_code,stock,unit", headers={'apikey': SUPA_KEY, 'Authorization': f'Bearer {SUPA_KEY}'})
                                 
-                            if s_req.status_code == 200 and len(s_req.json()) > 0:
-                                if not yj_code:
-                                    yj_code = s_req.json()[0].get('yj_code', '')
-                                stock_balance = float(str(s_req.json()[0].get('stock', '0')).replace(',', ''))
-                                inv_unit = str(s_req.json()[0].get('unit', ''))
+                                if s_req.status_code == 200 and len(s_req.json()) > 0:
+                                    if not yj_code:
+                                        yj_code = s_req.json()[0].get('yj_code', '')
+                                    stock_balance = float(str(s_req.json()[0].get('stock', '0')).replace(',', ''))
+                                    inv_unit = str(s_req.json()[0].get('unit', ''))
+                                    found_in_inventory = True
+                            
+                            if not found_in_inventory:
+                                enc_name = urllib.parse.quote(name)
+                                th_req = requests.get(f"{SUPA_URL}/transaction_history?name=eq.{enc_name}&order=transaction_date.desc&limit=1&select=stock_balance", headers={'apikey': SUPA_KEY, 'Authorization': f'Bearer {SUPA_KEY}'})
+                                if th_req.status_code == 200 and len(th_req.json()) > 0:
+                                    stock_balance = float(str(th_req.json()[0].get('stock_balance', '0')).replace(',', ''))
+                                    print(f"⚠️ inventoryに未存在のため transaction_history から在庫 {stock_balance} を取得: {name}")
+
                         except: pass
 
                         pack_name = m_info.get('pack_name')
@@ -192,6 +218,7 @@ async def get_medorder_deliveries(browser):
                                              'Prefer': 'return=representation'}
                             new_stock_str = str(int(new_stock)) if float(new_stock).is_integer() else str(round(new_stock, 2))
                             patch_ok = False
+                            local_updated_stocks[name] = new_stock
 
                             if yj_code:
                                 patch_url = f"{SUPA_URL}/inventory?yj_code=eq.{yj_code}"
