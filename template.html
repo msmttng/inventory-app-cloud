@@ -1,0 +1,1200 @@
+<body class="antialiased text-gray-800">
+<div id="app" class="min-h-screen flex flex-col items-center px-2 py-4 sm:px-6 sm:py-6 md:px-8 md:py-8">
+
+  <header :class="['w-full mb-4 mt-4 text-center transition-all duration-300', activeTab==='pending' ? 'max-w-6xl' : 'max-w-3xl']">
+    <h1 class="text-3xl sm:text-4xl font-bold text-indigo-700 tracking-tight flex items-center justify-center gap-3">
+      <i class="fa-solid fa-pills mb-1"></i> 在庫・棚番 検索
+    </h1>
+    <div class="flex items-center justify-center gap-3 mt-2">
+      <div class="flex flex-col sm:flex-row items-center gap-3">
+        <p class="text-gray-400 text-xs flex items-center gap-1">
+          <i class="fa-regular fa-clock"></i>
+          <span v-if="lastUpdated">最終更新: {{ lastUpdated }}</span>
+          <span v-else>更新日時を読み込み中...</span>
+        </p>
+        <div class="flex items-center gap-2 flex-wrap justify-center">
+          <div v-if="systemHealthStatus" class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-all duration-200 shadow-sm bg-white" :class="systemHealthStatus === 'ok' ? 'text-green-700 border-green-200' : 'text-red-700 border-red-200'">
+             <i class="fa-solid fa-circle fa-fade" :class="systemHealthStatus === 'ok' ? 'text-green-500' : 'text-red-500'"></i>
+             <span>システム{{ systemHealthStatus === 'ok' ? '正常' : '警告' }}</span>
+          </div>
+          <button @click="triggerScrape" :disabled="isScraping" 
+            class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-all duration-200 shadow-sm"
+            :class="isScraping ? 'bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed' : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 hover:shadow'">
+            <i class="fa-solid fa-cloud-arrow-down" :class="isScraping ? 'fa-beat' : ''"></i>在庫情報を取得
+          </button>
+          <button @click="reloadAllData" :disabled="isReloadingAll"
+            class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-all duration-200 shadow-sm"
+            :class="isReloadingAll ? 'bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed' : 'bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100 hover:shadow'">
+            <i class="fa-solid fa-arrows-rotate" :class="isReloadingAll ? 'spinner' : ''"></i>一括更新
+          </button>
+          <a href="https://app.medorder.jp/pharmacies/20/stocks" target="_blank" rel="noopener"
+            class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 hover:shadow transition-all duration-200">
+            <i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>MedOrder
+          </a>
+        </div>
+      </div>
+    </div>
+
+  </header>
+
+  <!-- ナビゲーション -->
+  <nav :class="['w-full mb-4 transition-all duration-300', activeTab==='pending' ? 'max-w-6xl' : 'max-w-3xl']">
+    <div class="glass-card rounded-xl p-1 nav-scroll">
+      <div class="nav-inner">
+        <button @click="activeTab='search'"
+          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5"
+          :class="activeTab==='search'?'bg-indigo-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-magnifying-glass text-base"></i><span class="text-[11px] leading-none mt-0.5">検索</span>
+        </button>
+        <button @click="switchToSupplyTab"
+          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5"
+          :class="activeTab==='supply'?'bg-pink-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-truck-fast text-base"></i><span class="text-[11px] leading-none mt-0.5">流通ﾁｪｯｸ</span>
+        </button>
+        <button @click="switchToMinusTab"
+          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5 relative"
+          :class="activeTab==='minus'?'bg-rose-700 text-white shadow':'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-circle-minus text-base"></i><span class="text-[11px] leading-none mt-0.5">マイナス</span>
+          <span v-if="minusData.length>0&&activeTab!=='minus'"
+            class="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-rose-700 text-white text-xs font-bold rounded-full flex items-center justify-center px-1">
+            {{ minusData.length>99?'99+':minusData.length }}
+          </span>
+        </button>
+        <!-- 未納未定タブ -->
+        <button @click="switchToPendingTab"
+          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5"
+          :class="activeTab==='pending'?'bg-orange-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-truck-ramp-box text-base"></i><span class="text-[11px] leading-none mt-0.5">未納未定</span>
+        </button>
+
+
+        <button @click="switchToReturnDeadTab"
+          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5"
+          :class="activeTab==='returnDead'?'bg-blue-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-rotate-left text-base"></i><span class="text-[11px] leading-none mt-0.5">返品/不動</span>
+        </button>
+        <button @click="switchToExpiryTab"
+          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5"
+          :class="activeTab==='expiry'?'bg-orange-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-hourglass-half text-base"></i><span class="text-[11px] leading-none mt-0.5">期限管理</span>
+        </button>
+
+        <!-- 履歴タブ -->
+        <button @click="switchToHistoryTab"
+          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5"
+          :class="activeTab==='history'?'bg-cyan-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-clock-rotate-left text-base"></i><span class="text-[11px] leading-none mt-0.5">発注履歴</span>
+        </button>
+        <!-- 納品履歴タブ -->
+        <button @click="switchToReceiveTab"
+          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5"
+          :class="activeTab==='receive'?'bg-emerald-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-box-open text-base"></i><span class="text-[11px] leading-none mt-0.5">納品履歴</span>
+        </button>
+        <!-- 未登録タブ -->
+        <button @click="switchToUnmatchedTab"
+          class="flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex flex-col items-center justify-center gap-0.5 relative"
+          :class="activeTab==='unmatched'?'bg-amber-600 text-white shadow':'text-gray-500 hover:bg-gray-100'">
+          <i class="fa-solid fa-triangle-exclamation text-base"></i><span class="text-[11px] leading-none mt-0.5">未登録</span>
+          <span v-if="unmatchedData.length>0&&activeTab!=='unmatched'"
+            class="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-amber-600 text-white text-xs font-bold rounded-full flex items-center justify-center px-1">
+            {{ unmatchedData.length>99?'99+':unmatchedData.length }}
+          </span>
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <main :class="['w-full transition-all duration-300', activeTab==='pending' ? 'max-w-6xl' : 'max-w-3xl']">
+
+    <!-- ===== 検索タブ ===== -->
+    <div v-if="activeTab==='search'">
+      <div class="glass-card rounded-2xl p-4 sm:p-6 mb-4">
+        <form @submit.prevent="performSearch" class="mb-4">
+          <div class="relative flex items-center w-full h-14 rounded-xl bg-white overflow-hidden border-2 border-indigo-100 focus-within:border-indigo-500 focus-within:shadow-lg transition-all duration-300">
+            <div class="grid place-items-center h-full w-12 text-indigo-400"><i class="fa-solid fa-magnifying-glass"></i></div>
+            <input v-model="searchQuery" class="h-full w-full outline-none text-gray-700 pr-2 placeholder-gray-400 bg-transparent text-lg font-medium" type="text" id="search" placeholder="薬の名前を入力してください..." autocomplete="off" :disabled="isLoading" />
+            <button type="button" v-if="searchQuery.length>0&&!isLoading" @click="clearSearch" class="h-full px-4 text-gray-400 hover:text-red-500 transition-colors"><i class="fa-solid fa-xmark"></i></button>
+            <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white h-full px-6 font-semibold text-sm sm:text-base min-w-[90px] flex items-center justify-center transition-colors" :disabled="isLoading||searchQuery.trim()===''" :class="{'opacity-50 cursor-not-allowed':isLoading||searchQuery.trim()===''}">
+              <span v-if="!isLoading">検索</span><i v-else class="fa-solid fa-circle-notch spinner text-lg"></i>
+            </button>
+          </div>
+        </form>
+        <div class="border-t border-gray-100 pt-4">
+          <div class="flex items-center justify-between mb-2">
+            <label class="text-xs font-semibold text-gray-500 flex items-center gap-2"><i class="fa-solid fa-triangle-exclamation text-amber-400"></i>在庫わずか警告ライン</label>
+            <span class="text-sm font-bold text-amber-500 bg-amber-50 border border-amber-200 rounded-full px-3 py-0.5">{{ lowStockThreshold }} 個以下</span>
+          </div>
+          <input type="range" v-model.number="lowStockThreshold" min="0" max="100" step="1" />
+          <div class="flex justify-between text-xs text-gray-300 mt-1"><span>0</span><span>50</span><span>100</span></div>
+        </div>
+      </div>
+      <div v-if="errorMsg" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg flex items-start fade-in"><i class="fa-solid fa-triangle-exclamation text-red-500 mt-1 mr-3"></i><p class="text-red-700">{{ errorMsg }}</p></div>
+      <div v-if="hasSearched&&!isLoading">
+        <div v-if="primaryResults.length === 0 && alternativeResults.length > 0" class="glass-card rounded-xl p-4 text-center bg-teal-50 border border-teal-100 mb-6 focus:outline-none fade-in">
+          <span class="text-sm font-semibold text-teal-700 block mb-1">
+            <i class="fa-solid fa-code-compare mr-1.5 opacity-80"></i>完全一致する在庫はありません。
+          </span>
+          <span class="text-xs text-teal-600 block opacity-90">代わりに、同じ成分を持つ代替薬を以下に表示しています。</span>
+        </div>
+        <div v-if="results.length===0" class="glass-card rounded-2xl p-10 text-center fade-in flex flex-col items-center"><div class="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-4"><i class="fa-solid fa-box-open text-3xl text-gray-300"></i></div><h3 class="text-lg font-medium text-gray-900 mb-1">見つかりませんでした</h3><p class="text-gray-500 text-sm">「{{ lastSearchedQuery }}」に一致する薬は登録されていません。</p></div>
+        <div v-else>
+          <div class="flex justify-between items-center mb-3 px-2"><h2 class="text-lg font-semibold text-gray-700">検索結果</h2><div class="flex items-center gap-2"><span v-if="lowStockCount>0" class="text-xs font-medium bg-amber-100 text-amber-700 py-1 px-3 rounded-full flex items-center gap-1 low-stock-pulse"><i class="fa-solid fa-triangle-exclamation text-xs"></i> 在庫わずか {{ lowStockCount }}件</span><span class="text-xs font-medium bg-indigo-100 text-indigo-800 py-1 px-3 rounded-full">合致 {{ primaryResults.length }}件 <span v-if="alternativeResults.length>0">/ 代替 {{ alternativeResults.length }}件</span></span></div></div>
+          <div class="space-y-3 mb-6">
+                        <div v-for="(item,index) in primaryResults" :key="'p'+index" class="glass-card rounded-xl p-5 border-l-4 border-indigo-500 hover:shadow-md transition-shadow fade-in" :class="{'low-stock-border':isLowStock(item.stock)}" :style="'animation-delay:'+(index*0.04)+'s'">
+              <div class="flex justify-between items-start gap-4 mb-3">
+                <div class="flex-1 min-w-0 pr-2 pb-1 sm:pb-0">
+                  <div class="flex items-center gap-2 mb-1 flex-wrap">
+                    <span class="text-xs text-indigo-500 font-bold tracking-wider uppercase">薬品名</span>
+                    <span v-if="item.type&&item.type.includes('後発')" class="text-[10px] font-bold text-teal-700 bg-teal-100 border border-teal-200 rounded px-1.5 py-0.5">後発品</span>
+                    <span v-if="item.type&&item.type.includes('先発')" class="text-[10px] font-bold text-blue-700 bg-blue-100 border border-blue-200 rounded px-1.5 py-0.5">先発品</span>
+                    <span v-if="item.supplyStatus&&!item.supplyStatus.includes('通常出荷')" @click="searchSupplyFromBadge(item)" class="text-[10px] font-bold text-pink-700 bg-pink-100 border border-pink-200 rounded px-1.5 py-0.5 cursor-pointer hover:bg-pink-200 transition-colors"><i class="fa-solid fa-truck-fast mr-1"></i>{{ item.supplyStatus }}</span>
+                    <span v-else-if="item.supplyStatus" @click="searchSupplyFromBadge(item)" class="text-[10px] font-bold text-green-700 bg-green-100 border border-green-200 rounded px-1.5 py-0.5 cursor-pointer hover:bg-green-200 transition-colors"><i class="fa-solid fa-check mr-1"></i>{{ item.supplyStatus }}</span>
+                    <span v-if="isEnifTarget(item)" class="text-[10px] font-bold text-purple-700 bg-purple-100 border border-purple-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-box-open mr-1"></i>ENIF小分け対象</span>
+                    <span v-if="item.isOrdered" class="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-circle-check mr-1"></i>発注済 ({{ item.orderSource }}) {{ item.orderSupplier ? '/ ' + item.orderSupplier : '' }}</span>
+                    <span v-if="item.isNotRegistered" class="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-triangle-exclamation mr-1"></i>当局在庫なし</span>
+                    <span v-else-if="isLowStock(item.stock)" class="text-xs font-bold text-amber-600 bg-amber-100 border border-amber-200 rounded-full px-2 py-0.5 flex items-center gap-1 low-stock-pulse"><i class="fa-solid fa-triangle-exclamation text-xs"></i> 在庫わずか</span>
+                    <span v-if="item.nextDelivery" class="text-[10px] font-bold text-emerald-700 bg-emerald-100 border border-emerald-200 rounded px-1.5 py-0.5"><i class="fa-regular fa-calendar-check mr-1"></i>最終納品日: {{ item.nextDelivery }}</span>
+                  </div>
+                  <h3 class="text-lg sm:text-xl font-bold text-gray-900 leading-tight break-words">{{ item.name }}</h3>
+                  <div class="flex flex-wrap items-center gap-2 mt-2 mb-1">
+                    <a :href="'https://minkusu.jp/ds/search?s=' + encodeURIComponent(normalizeForSearch(item.name)) + '&hd_s1='" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[11px] font-bold rounded transition-colors border border-blue-200">
+                      <i class="fa-solid fa-arrow-up-right-from-square"></i> Minkusuで検索
+                    </a>
+                    <button @click.stop="openTohoEnif(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-purple-600 border border-purple-200 hover:bg-purple-50 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                      <i class="fa-solid fa-box"></i> ENIF小分け
+                    </button>
+                    <button @click.stop="openOrderEpi(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-indigo-600 border border-indigo-200 hover:bg-indigo-50 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                      <i class="fa-solid fa-capsules"></i> EPI発注
+                    </button>
+                    <button @click.stop="openOrderMedorder(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-cyan-600 border border-cyan-200 hover:bg-cyan-50 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                      <i class="fa-solid fa-hospital"></i> MedOrder
+                    </button>
+                    <button @click.stop="openAdjustModal(item)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap mr-1"><i class="fa-solid fa-pen-to-square"></i> 調整</button>
+                    <button @click.stop="openTransactionHistory(item)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                      <i class="fa-solid fa-clock-rotate-left"></i> 入出庫履歴
+                    </button>
+                    <button @click="toggleMemoEdit(item.name)" class="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-bold rounded transition-colors border" :class="memos[item.name]?'bg-yellow-50 text-yellow-700 border-yellow-300 hover:bg-yellow-100':'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'">
+                      <i class="fa-solid fa-note-sticky"></i> {{ memos[item.name] ? 'メモあり' : 'メモ' }}
+                    </button>
+                  </div>
+                  <div v-if="memos[item.name]&&editingMemo!==item.name" class="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 text-sm text-yellow-800 mt-1 flex items-start gap-2">
+                    <i class="fa-solid fa-note-sticky text-yellow-400 mt-0.5"></i>
+                    <span class="whitespace-pre-wrap break-words flex-1">{{ memos[item.name] }}</span>
+                  </div>
+                  <div v-if="editingMemo===item.name" class="bg-yellow-50 border border-yellow-300 rounded-lg p-3 mt-1">
+                    <textarea v-model="editingMemoText" rows="2" class="w-full text-sm border border-yellow-200 rounded px-2 py-1.5 outline-none focus:border-yellow-400 bg-white resize-none" placeholder="メモを入力..."></textarea>
+                    <div class="flex gap-2 mt-2">
+                      <button @click="saveMemoAction(item.name)" :disabled="memoSaving" class="text-xs font-bold px-3 py-1.5 bg-yellow-500 text-white rounded hover:bg-yellow-600 transition-colors disabled:opacity-50"><i class="fa-solid fa-check mr-1"></i>保存</button>
+                      <button @click="editingMemo=''" class="text-xs font-bold px-3 py-1.5 bg-gray-200 text-gray-600 rounded hover:bg-gray-300 transition-colors">キャンセル</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="shrink-0 flex items-start">
+                  <div class="rounded-lg p-2 sm:p-3 min-w-[70px] sm:min-w-[90px] text-center border transition-colors flex flex-col justify-center" :class="item.isNotRegistered?'bg-red-50 border-red-200':item.sokuhoQty?'sokuho-box border-emerald-200':isLowStock(item.stock)?'bg-amber-50 border-amber-200':'bg-gray-50 border-gray-100'">
+                    <div class="text-[10px] sm:text-xs font-medium mb-1" :class="item.isNotRegistered?'text-red-500':isLowStock(item.stock)?'text-amber-600':'text-gray-500'">
+                      <i class="fa-solid fa-cubes mr-1" :class="item.isNotRegistered?'text-red-400':isLowStock(item.stock)?'text-amber-400':'text-gray-400'"></i>在庫数
+                    </div>
+                    <!-- 速報あり: 打消し線旧在庫 → 矢印 → 新在庫 -->
+                    <template v-if="item.sokuhoQty">
+                      <div class="text-[11px] font-bold text-gray-400 sokuho-strikethrough leading-none">{{ item.sokuhoBaseStock }}</div>
+                      <div class="text-[10px] text-indigo-400 font-bold my-0.5">↓</div>
+                      <div class="text-xl sm:text-2xl font-bold text-indigo-700">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
+                      <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                      <div class="mt-1 sokuho-pulse"><span class="sokuho-badge"><i class="fa-solid fa-truck-fast mr-0.5"></i>速報+{{ item.sokuhoQty }}</span></div>
+                    </template>
+                    <!-- 通常表示 -->
+                    <template v-else>
+                      <div class="text-xl sm:text-2xl font-bold" :class="item.isNotRegistered?'text-red-600':isLowStock(item.stock)?'text-amber-600':'text-gray-800'">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
+                      <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+              <div class="bg-indigo-50 rounded-lg px-3 py-2.5 border border-indigo-100 flex items-start sm:items-center flex-col sm:flex-row shadow-inner"><div class="text-[11px] sm:text-xs text-indigo-500 font-bold whitespace-nowrap mr-3 mb-1 sm:mb-0"><i class="fa-solid fa-layer-group mr-1.5 opacity-70"></i>棚番:</div><div class="text-sm sm:text-base font-bold text-indigo-800 break-words leading-tight">{{ item.shelf!==''?item.shelf:'-' }}</div></div>
+            </div>
+          </div>
+          <div v-if="alternativeResults.length>0" class="mt-8 fade-in" style="animation-delay:0.3s">
+            <div class="flex items-center gap-2 mb-3 px-2"><i class="fa-solid fa-code-compare text-teal-500"></i><h2 class="text-md font-bold text-gray-700">同じ成分の代替薬 <span class="text-xs font-normal text-gray-400 ml-1">（{{ alternativeResults.length }}件）</span></h2></div>
+            <div class="space-y-3">
+                          <div v-for="(item,index) in alternativeResults" :key="'a'+index" class="glass-card rounded-xl p-4 border-l-4 border-teal-400 hover:shadow-md transition-shadow bg-gradient-to-r from-teal-50/30 to-transparent" :class="{'low-stock-border':isLowStock(item.stock)}">
+                <div class="flex justify-between items-start gap-4 mb-3">
+                  <div class="flex-1 min-w-0 pr-2 pb-1 sm:pb-0">
+                    <div class="flex items-center gap-2 mb-1 flex-wrap">
+                      <span class="text-[10px] font-bold text-teal-700 bg-teal-100 border border-teal-200 rounded px-1.5 py-0.5">代替提案</span>
+                      <span v-if="item.type&&item.type.includes('後発')" class="text-[10px] font-bold text-teal-700 bg-teal-100 border border-teal-200 rounded px-1.5 py-0.5">後発品</span>
+                      <span v-if="item.type&&item.type.includes('先発')" class="text-[10px] font-bold text-blue-700 bg-blue-100 border border-blue-200 rounded px-1.5 py-0.5">先発品</span>
+                      <span v-if="item.supplyStatus&&!item.supplyStatus.includes('通常出荷')" @click="searchSupplyFromBadge(item)" class="text-[10px] font-bold text-pink-700 bg-pink-100 border border-pink-200 rounded px-1.5 py-0.5 cursor-pointer hover:bg-pink-200 transition-colors"><i class="fa-solid fa-truck-fast mr-1"></i>{{ item.supplyStatus }}</span>
+                    <span v-else-if="item.supplyStatus" @click="searchSupplyFromBadge(item)" class="text-[10px] font-bold text-green-700 bg-green-100 border border-green-200 rounded px-1.5 py-0.5 cursor-pointer hover:bg-green-200 transition-colors"><i class="fa-solid fa-check mr-1"></i>{{ item.supplyStatus }}</span>
+                      <span v-if="isEnifTarget(item)" class="text-[10px] font-bold text-purple-700 bg-purple-100 border border-purple-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-box-open mr-1"></i>ENIF小分け対象</span>
+                      <span v-if="item.isOrdered" class="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-circle-check mr-1"></i>発注済 ({{ item.orderSource }}) {{ item.orderSupplier ? '/ ' + item.orderSupplier : '' }}</span>
+                      <span v-if="item.isNotRegistered" class="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-triangle-exclamation mr-1"></i>当局在庫なし</span>
+                      <span v-else-if="isLowStock(item.stock)" class="text-xs font-bold text-amber-600 bg-amber-100 border border-amber-200 rounded-full px-2 py-0.5 flex items-center gap-1 low-stock-pulse"><i class="fa-solid fa-triangle-exclamation text-xs"></i> わずか</span>
+                      <span v-if="item.nextDelivery" class="text-[10px] font-bold text-emerald-700 bg-emerald-100 border border-emerald-200 rounded px-1.5 py-0.5"><i class="fa-regular fa-calendar-check mr-1"></i>最終納品日: {{ item.nextDelivery }}</span>
+                    </div>
+                    <h3 class="text-base sm:text-lg font-bold text-gray-800 leading-tight break-words">{{ item.name }}</h3>
+                    <div class="flex flex-wrap items-center gap-2 mt-2 mb-1">
+                      <a :href="'https://minkusu.jp/ds/search?s=' + encodeURIComponent(normalizeForSearch(item.name)) + '&hd_s1='" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[11px] font-bold rounded transition-colors border border-blue-200">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i> Minkusuで検索
+                      </a>
+                      <button @click.stop="openTohoEnif(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-purple-600 border border-purple-200 hover:bg-purple-50 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                        <i class="fa-solid fa-box"></i> ENIF小分け
+                      </button>
+                      <button @click.stop="openOrderEpi(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-indigo-600 border border-indigo-200 hover:bg-indigo-50 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                        <i class="fa-solid fa-capsules"></i> EPI発注
+                      </button>
+                      <button @click.stop="openOrderMedorder(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-cyan-600 border border-cyan-200 hover:bg-cyan-50 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                        <i class="fa-solid fa-hospital"></i> MedOrder
+                      </button>
+                      <button @click.stop="openAdjustModal(item)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap mr-1"><i class="fa-solid fa-pen-to-square"></i> 調整</button>
+                      <button @click.stop="openTransactionHistory(item)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                        <i class="fa-solid fa-clock-rotate-left"></i> 入出庫履歴
+                      </button>
+                      <button @click="toggleMemoEdit(item.name)" class="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-bold rounded transition-colors border" :class="memos[item.name]?'bg-yellow-50 text-yellow-700 border-yellow-300 hover:bg-yellow-100':'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'">
+                        <i class="fa-solid fa-note-sticky"></i> {{ memos[item.name] ? 'メモあり' : 'メモ' }}
+                      </button>
+                    </div>
+                    <div v-if="memos[item.name]&&editingMemo!==item.name" class="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 text-sm text-yellow-800 mt-1 flex items-start gap-2">
+                      <i class="fa-solid fa-note-sticky text-yellow-400 mt-0.5"></i>
+                      <span class="whitespace-pre-wrap break-words flex-1">{{ memos[item.name] }}</span>
+                    </div>
+                    <div v-if="editingMemo===item.name" class="bg-yellow-50 border border-yellow-300 rounded-lg p-3 mt-1">
+                      <textarea v-model="editingMemoText" rows="2" class="w-full text-sm border border-yellow-200 rounded px-2 py-1.5 outline-none focus:border-yellow-400 bg-white resize-none" placeholder="メモを入力..."></textarea>
+                      <div class="flex gap-2 mt-2">
+                        <button @click="saveMemoAction(item.name)" :disabled="memoSaving" class="text-xs font-bold px-3 py-1.5 bg-yellow-500 text-white rounded hover:bg-yellow-600 transition-colors disabled:opacity-50"><i class="fa-solid fa-check mr-1"></i>保存</button>
+                        <button @click="editingMemo=''" class="text-xs font-bold px-3 py-1.5 bg-gray-200 text-gray-600 rounded hover:bg-gray-300 transition-colors">キャンセル</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="shrink-0 flex items-start">
+                    <div class="rounded-lg p-2 min-w-[65px] sm:min-w-[80px] text-center border transition-colors flex flex-col justify-center" :class="item.isNotRegistered?'bg-red-50 border-red-200':item.sokuhoQty?'sokuho-box border-emerald-200':isLowStock(item.stock)?'bg-amber-50 border-amber-200':'bg-white border-gray-100'">
+                      <div class="text-[10px] font-medium mb-0.5" :class="item.isNotRegistered?'text-red-500':isLowStock(item.stock)?'text-amber-600':'text-gray-500'">在庫</div>
+                      <template v-if="item.sokuhoQty">
+                        <div class="text-[10px] font-bold text-gray-400 sokuho-strikethrough leading-none">{{ item.sokuhoBaseStock }}</div>
+                        <div class="text-[9px] text-indigo-400 font-bold">↓</div>
+                        <div class="text-lg sm:text-xl font-bold text-indigo-700">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
+                        <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                        <div class="mt-0.5 sokuho-pulse"><span class="sokuho-badge"><i class="fa-solid fa-truck-fast mr-0.5"></i>速報+{{ item.sokuhoQty }}</span></div>
+                      </template>
+                      <template v-else>
+                        <div class="text-lg sm:text-xl font-bold" :class="item.isNotRegistered?'text-red-600':isLowStock(item.stock)?'text-amber-600':'text-gray-800'">{{ item.stock!==''?(item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayStock:item.stock):'-' }}</div>
+                        <div class="text-[10px] text-gray-400 mt-0.5">{{ item.name.includes('点眼')?convertEyedrop(item.stock,item.oldestStock,item.unit,item.name).displayUnit:(normalizeUnit(item.unit,item.name)||'個') }}</div>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+                <div class="bg-teal-50 rounded-lg px-3 py-2.5 border border-teal-100 flex items-start sm:items-center flex-col sm:flex-row shadow-inner"><div class="text-[11px] sm:text-xs text-teal-600 font-bold whitespace-nowrap mr-3 mb-1 sm:mb-0"><i class="fa-solid fa-layer-group mr-1.5 opacity-70"></i>棚番:</div><div class="text-sm sm:text-base font-bold text-teal-800 break-words leading-tight">{{ item.shelf!==''?item.shelf:'-' }}</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div v-if="!hasSearched&&!isLoading" class="glass-card rounded-2xl p-10 text-center text-gray-400 mt-2"><i class="fa-solid fa-magnifying-glass text-4xl mb-4 opacity-20 block"></i><p>上部の検索窓に薬の名前を入力して検索してください</p></div>
+    </div>
+
+    <!-- ===== 流通チェックタブ ===== -->
+    <div v-if="activeTab==='supply'">
+      <div class="glass-card rounded-2xl p-4 sm:p-6 mb-4 border-t-4 border-pink-500">
+        <div class="flex items-center gap-2 mb-3">
+          <i class="fa-solid fa-truck-fast text-pink-500"></i>
+          <h2 class="text-sm font-bold text-gray-700">厚労省 供給状況検索</h2>
+        </div>
+        <form @submit.prevent="performSupplySearch" class="mb-2">
+          <div class="relative flex items-center w-full h-14 rounded-xl bg-white overflow-hidden border-2 border-pink-100 focus-within:border-pink-500 focus-within:shadow-lg transition-all duration-300">
+            <div class="grid place-items-center h-full w-12 text-pink-400"><i class="fa-solid fa-magnifying-glass"></i></div>
+            <input v-model="supplyQuery" class="h-full w-full outline-none text-gray-700 pr-2 placeholder-gray-400 bg-transparent text-lg font-medium" type="text" id="searchSupply" placeholder="薬の名前を入力してください..." autocomplete="off" :disabled="supplyIsLoading" />
+            <button type="button" v-if="supplyQuery.length>0&&!supplyIsLoading" @click="clearSupplySearch" class="h-full px-4 text-gray-400 hover:text-red-500 transition-colors"><i class="fa-solid fa-xmark"></i></button>
+            <button type="submit" class="bg-pink-600 hover:bg-pink-700 text-white h-full px-6 font-semibold text-sm sm:text-base min-w-[90px] flex items-center justify-center transition-colors" :disabled="supplyIsLoading||supplyQuery.trim()===''" :class="{'opacity-50 cursor-not-allowed':supplyIsLoading||supplyQuery.trim()===''}">
+              <span v-if="!supplyIsLoading">検索</span><i v-else class="fa-solid fa-circle-notch spinner text-lg"></i>
+            </button>
+          </div>
+        </form>
+      </div>
+      <div v-if="supplyErrorMsg" class="glass-card rounded-2xl p-8 mb-4 fade-in flex flex-col items-center text-center">
+        <div class="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mb-4">
+          <i class="fa-solid fa-key text-2xl text-amber-400"></i>
+        </div>
+        <h3 class="text-base font-bold text-gray-800 mb-1">再認証が必要です</h3>
+        <p class="text-sm text-gray-500 mb-4">MedOrderのアクセストークンが期限切れのため、流通チェックデータを取得できませんでした。</p>
+        <button @click="requestTokenRefresh()" :disabled="tokenRefreshState==='requesting'||tokenRefreshState==='done'"
+          class="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm transition-all mb-3"
+          :class="tokenRefreshState==='done' ? 'bg-green-100 text-green-700 border border-green-300' : tokenRefreshState==='error' ? 'bg-red-100 text-red-700 border border-red-300' : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-md hover:shadow-lg'">
+          <i :class="tokenRefreshState==='requesting' ? 'fa-solid fa-circle-notch spinner' : tokenRefreshState==='done' ? 'fa-solid fa-check' : tokenRefreshState==='error' ? 'fa-solid fa-triangle-exclamation' : 'fa-solid fa-arrows-rotate'"></i>
+          <span>{{ tokenRefreshState==='requesting' ? '要求中...' : tokenRefreshState==='done' ? '要求しました！daemonが実行します' : tokenRefreshState==='error' ? '失敗しました' : '🔄 トークン更新を要求' }}</span>
+        </button>
+        <details class="text-left w-full max-w-xs">
+          <summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-600">手動実行の場合</summary>
+          <div class="bg-gray-50 border border-gray-200 rounded-xl px-5 py-3 text-xs font-mono text-gray-600 mt-2">
+            <span class="text-gray-400 select-none">$ </span>python extract_data.py
+          </div>
+        </details>
+      </div>
+      <div v-if="supplyHasSearched&&!supplyIsLoading">
+        <div v-if="supplyResults.length===0" class="glass-card rounded-2xl p-10 text-center fade-in flex flex-col items-center"><div class="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-4"><i class="fa-solid fa-box-open text-3xl text-gray-300"></i></div><h3 class="text-lg font-medium text-gray-900 mb-1">見つかりませんでした</h3><p class="text-gray-500 text-sm">「{{ supplyLastSearchedQuery }}」の厚労省供給状況データは見つかりませんでした。</p></div>
+        <div v-else>
+          <div class="flex justify-between items-center mb-3 px-2"><h2 class="text-lg font-semibold text-gray-700">検索結果</h2><div class="flex items-center gap-2"><span class="text-xs font-medium bg-pink-100 text-pink-800 py-1 px-3 rounded-full">合致 {{ primarySupplyResults.length }}件<span v-if="alternativeSupplyResults.length>0"> / 代替 {{ alternativeSupplyResults.length }}件</span></span></div></div>
+          
+          <!-- 追加: 並び替えボタン -->
+          <div class="flex flex-wrap items-center gap-2 mb-3 px-2">
+            <span class="text-xs font-semibold text-gray-400 mr-1">並び替え：</span>
+            <button v-for="opt in supplySortOptions" :key="opt.value" @click="supplySort=opt.value" 
+              class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" 
+              :class="supplySort===opt.value?'bg-pink-600 text-white border-pink-600 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-pink-400 hover:text-pink-600'">
+              <i :class="opt.icon" class="mr-1"></i>{{ opt.label }}
+            </button>
+          </div>
+
+          <div class="space-y-3 mb-6">
+            <div v-for="(item,index) in primarySupplyResults" :key="'sp'+index" class="glass-card rounded-xl p-5 border-l-4 border-pink-500 hover:shadow-md transition-shadow fade-in" :style="'animation-delay:'+(index*0.04)+'s'">
+              <div class="flex justify-between items-start gap-4 mb-1">
+                <div class="flex-1 min-w-0 pr-2 pb-1">
+                  <div class="flex items-center gap-2 mb-1 flex-wrap">
+                    <span class="text-xs text-pink-500 font-bold tracking-wider uppercase">薬品名</span>
+                    <span v-if="item.yjCode" class="text-[10px] font-bold text-gray-600 bg-gray-100 border border-gray-200 rounded px-1.5 py-0.5">YJ: {{ item.yjCode }}</span>
+                    <span v-if="item.supplyStatus&&!item.supplyStatus.includes('通常出荷')" class="text-[10px] font-bold text-pink-700 bg-pink-100 border border-pink-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-truck-fast mr-1"></i>{{ item.supplyStatus }}</span>
+                    <span v-else-if="item.supplyStatus" class="text-[10px] font-bold text-green-700 bg-green-100 border border-green-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-check mr-1"></i>{{ item.supplyStatus }}</span>
+                    <span v-if="isEnifTarget(item)" class="text-[10px] font-bold text-purple-700 bg-purple-100 border border-purple-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-box-open mr-1"></i>ENIF小分け対象</span>
+                    <span v-if="item.stockFound && parseFloat(item.stock) > 0" class="text-[10px] font-bold text-blue-700 bg-blue-100 border border-blue-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-cube mr-1"></i>在庫あり: {{ item.stock }}<template v-if="item.shelf"> ({{ item.shelf }})</template></span>
+                    <span v-else-if="item.stockFound" class="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-triangle-exclamation mr-1"></i>当局在庫なし</span>
+                  </div>
+                  <h3 class="text-lg sm:text-xl font-bold text-gray-900 leading-tight break-words mb-2">{{ item.name }}</h3>
+                  <div class="flex flex-wrap items-center gap-2 mt-2 mb-1">
+                    <a :href="'https://minkusu.jp/ds/search?s=' + encodeURIComponent(normalizeForSearch(item.name)) + '&hd_s1='" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-lg transition-colors border border-blue-200">
+                      <i class="fa-solid fa-arrow-up-right-from-square"></i> Minkusuで検索
+                    </a>
+                    <button @click.stop="openTohoEnif(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white text-purple-600 border border-purple-200 hover:bg-purple-50 font-bold text-xs rounded-lg shadow-sm transition-colors whitespace-nowrap">
+                      <i class="fa-solid fa-box"></i> ENIF小分け
+                    </button>
+                      <button @click.stop="openOrderEpi(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white text-indigo-600 border border-indigo-200 hover:bg-indigo-50 font-bold text-xs rounded-lg shadow-sm transition-colors whitespace-nowrap">
+                      <i class="fa-solid fa-capsules"></i> EPI発注
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div v-if="alternativeSupplyResults.length>0" class="mt-8 fade-in" style="animation-delay:0.3s">
+            <div class="flex items-center gap-2 mb-3 px-2"><i class="fa-solid fa-code-compare text-teal-500"></i><h2 class="text-md font-bold text-gray-700">同じ成分の代替薬 <span class="text-xs font-normal text-gray-400 ml-1">（{{ alternativeSupplyResults.length }}件）</span></h2></div>
+            <div class="space-y-3">
+              <div v-for="(item,index) in alternativeSupplyResults" :key="'sa'+index" class="glass-card rounded-xl p-4 border-l-4 border-teal-400 hover:shadow-md transition-shadow bg-gradient-to-r from-teal-50/30 to-transparent">
+                  <div class="flex justify-between items-start gap-4 mb-1">
+                    <div class="flex-1 min-w-0 pr-2 pb-1">
+                      <div class="flex items-center gap-2 mb-1 flex-wrap">
+                        <span class="text-[10px] font-bold text-teal-700 bg-teal-100 border border-teal-200 rounded px-1.5 py-0.5">代替提案</span>
+                        <span v-if="item.yjCode" class="text-[10px] font-bold text-gray-600 bg-gray-100 border border-gray-200 rounded px-1.5 py-0.5">YJ: {{ item.yjCode }}</span>
+                        <span v-if="item.supplyStatus&&!item.supplyStatus.includes('通常出荷')" class="text-[10px] font-bold text-pink-700 bg-pink-100 border border-pink-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-truck-fast mr-1"></i>{{ item.supplyStatus }}</span>
+                        <span v-else-if="item.supplyStatus" class="text-[10px] font-bold text-green-700 bg-green-100 border border-green-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-check mr-1"></i>{{ item.supplyStatus }}</span>
+                        <span v-if="isEnifTarget(item)" class="text-[10px] font-bold text-purple-700 bg-purple-100 border border-purple-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-box-open mr-1"></i>ENIF小分け対象</span>
+                        <span v-if="item.stockFound && parseFloat(item.stock) > 0" class="text-[10px] font-bold text-blue-700 bg-blue-100 border border-blue-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-cube mr-1"></i>在庫あり: {{ item.stock }}<template v-if="item.shelf"> ({{ item.shelf }})</template></span>
+                        <span v-else-if="item.stockFound" class="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-triangle-exclamation mr-1"></i>当局在庫なし</span>
+                      </div>
+                      <h3 class="text-base sm:text-lg font-bold text-gray-800 leading-tight break-words mb-2">{{ item.name }}</h3>
+                      <div class="flex flex-wrap items-center gap-2 mt-2 mb-1">
+                        <a :href="'https://minkusu.jp/ds/search?s=' + encodeURIComponent(normalizeForSearch(item.name)) + '&hd_s1='" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[11px] font-bold rounded flex-wrap transition-colors border border-blue-200">
+                          <i class="fa-solid fa-arrow-up-right-from-square"></i> Minkusuで検索
+                        </a>
+                        <button @click.stop="openTohoEnif(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-purple-600 border border-purple-200 hover:bg-purple-50 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                          <i class="fa-solid fa-box mb-0.5"></i> ENIF小分け
+                        </button>
+                        <button @click.stop="openOrderEpi(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-indigo-600 border border-indigo-200 hover:bg-indigo-50 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                          <i class="fa-solid fa-capsules mb-0.5"></i> EPI発注
+                        </button>
+                        <button @click.stop="openAdjustModal(item)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap mr-1"><i class="fa-solid fa-pen-to-square"></i> 調整</button>
+                        <button @click.stop="openTransactionHistory(item)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                          <i class="fa-solid fa-clock-rotate-left"></i> 入出庫履歴
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div v-if="!supplyHasSearched&&!supplyIsLoading" class="glass-card rounded-2xl p-10 text-center text-gray-400 mt-2"><i class="fa-solid fa-truck-fast text-4xl mb-4 opacity-20 block"></i><p>上部の検索窓に薬の一般名や商品名を入力して検索してください</p></div>
+    </div>
+
+
+    <div v-if="activeTab==='returnDead'">
+      <div class="rd-sub-bar">
+        <button class="rd-sub-btn rd-sub-return" :class="{active:rdSubTab==='return'}" @click="rdSubTab='return'">
+          <i class="fa-solid fa-rotate-left text-base"></i>
+          <span>返品推奨</span>
+          <span class="text-[10px] font-bold opacity-80">{{ returnData.length }}件</span>
+        </button>
+        <button class="rd-sub-btn rd-sub-dead" :class="{active:rdSubTab==='dead'}" @click="rdSubTab='dead'">
+          <i class="fa-solid fa-ghost text-base"></i>
+          <span>不動在庫</span>
+          <span class="text-[10px] font-bold opacity-80">{{ deadData.length }}件</span>
+        </button>
+      </div>
+
+      <!-- 返品サブ -->
+      <div v-if="rdSubTab==='return'">
+        <div v-if="returnLoading" class="glass-card rounded-2xl p-12 text-center"><i class="fa-solid fa-circle-notch spinner text-4xl text-blue-400 block mb-4"></i><p class="text-gray-400">返品推奨データを読み込み中...</p></div>
+        <div v-else-if="returnError" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg flex items-start"><i class="fa-solid fa-triangle-exclamation text-red-500 mt-1 mr-3"></i><p class="text-red-700">{{ returnError }}</p></div>
+        <div v-else-if="returnData.length>0">
+          <div class="flex justify-between items-center mb-2 px-2"><h2 class="text-lg font-bold text-blue-800 flex items-center gap-2"><i class="fa-solid fa-rotate-left"></i> 返品推奨品リスト</h2><span class="text-xs font-medium bg-blue-100 text-blue-800 py-1 px-3 rounded-full">{{ returnData.length }}件</span></div>
+          <div v-if="tabUpdatedTimes.return" class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-3 px-2"><i class="fa-regular fa-clock"></i><span>データ更新: {{ tabUpdatedTimes.return }}</span></div>
+          <div class="flex flex-wrap items-center gap-2 mb-3"><span class="text-xs font-semibold text-gray-400 mr-1">並び替え：</span><button v-for="opt in rdSortOptions" :key="opt.value" @click="returnSort=opt.value" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="returnSort===opt.value?'bg-blue-600 text-white border-blue-600 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-blue-400 hover:text-blue-600'"><i :class="opt.icon" class="mr-1"></i>{{ opt.label }}</button></div>
+          <div class="relative mb-4"><i class="fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i><input v-model="returnFilterStr" type="text" placeholder="棚番・薬品名で絞り込み..." class="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-blue-400 bg-white" /><button v-if="returnFilterStr" @click="returnFilterStr=''" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors"><i class="fa-solid fa-xmark text-sm"></i></button></div>
+          <div class="glass-card rounded-xl overflow-hidden shadow-sm"><div v-for="(item,i) in filteredReturnData" :key="i" class="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-blue-50 transition-colors fade-in" :style="'animation-delay:'+(i*0.02)+'s'"><div class="flex-1 min-w-0 mr-3"><div class="font-bold text-gray-800 text-base truncate">{{ item.name }}</div><div class="flex flex-wrap items-center gap-2 mt-1"><div class="text-xs text-gray-500 flex items-center gap-1 font-medium bg-gray-100 w-fit px-2 py-0.5 rounded"><i class="fa-solid fa-layer-group text-xs text-blue-500"></i> {{ item.shelf!==""?item.shelf:"-" }}</div><div v-if="item.priceStr" class="text-[10px] text-gray-400 font-medium">薬価: {{ item.priceStr }}</div><div v-if="item.lot" class="text-[10px] text-indigo-600 flex items-center gap-1 font-medium bg-indigo-50 w-fit px-2 py-0.5 rounded border border-indigo-100"><i class="fa-solid fa-barcode text-[9px]"></i> LOT: {{ item.lot }}</div><div v-if="item.supplier" class="text-[10px] text-emerald-600 flex items-center gap-1 font-medium bg-emerald-50 w-fit px-2 py-0.5 rounded border border-emerald-100"><i class="fa-solid fa-truck text-[9px]"></i> 卸: {{ item.supplier }}</div><div v-if="item.lastPurchaseDate" class="text-[10px] text-amber-600 flex items-center gap-1 font-medium bg-amber-50 w-fit px-2 py-0.5 rounded border border-amber-100"><i class="fa-regular fa-calendar-check text-[9px]"></i> 購入: {{ item.lastPurchaseDate }}</div></div></div><div class="shrink-0 flex items-center gap-3"><div v-if="item.stockValueStr" class="text-right"><div class="text-[10px] text-gray-400 font-bold uppercase">在庫金額</div><div class="text-sm font-bold text-gray-600">{{ item.stockValueStr }}</div></div><div class="shrink-0 text-center bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100 min-w-[60px]"><div class="text-[10px] text-gray-400 font-bold mb-0.5 uppercase tracking-wide">在庫</div><div class="text-xl font-black text-gray-700">{{ item.stock!==""?item.stock:"-" }}</div></div></div></div></div>
+        </div>
+        <div v-else-if="!returnLoading" class="glass-card rounded-2xl p-10 text-center text-gray-400"><i class="fa-solid fa-rotate-left text-4xl mb-4 opacity-20 block"></i><p>返品推奨品はありません</p></div>
+      </div>
+
+      <!-- 不動サブ -->
+      <div v-if="rdSubTab==='dead'">
+        <div v-if="deadLoading" class="glass-card rounded-2xl p-12 text-center"><i class="fa-solid fa-circle-notch spinner text-4xl text-purple-400 block mb-4"></i><p class="text-gray-400">不動在庫データを読み込み中...</p></div>
+        <div v-else-if="deadError" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg flex items-start"><i class="fa-solid fa-triangle-exclamation text-red-500 mt-1 mr-3"></i><p class="text-red-700">{{ deadError }}</p></div>
+        <div v-else-if="deadData.length>0">
+          <div class="flex justify-between items-center mb-2 px-2"><h2 class="text-lg font-bold text-purple-800 flex items-center gap-2"><i class="fa-solid fa-ghost"></i> 不動在庫の可能性</h2><span class="text-xs font-medium bg-purple-100 text-purple-800 py-1 px-3 rounded-full">{{ deadData.length }}件</span></div>
+          <div v-if="tabUpdatedTimes.dead" class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-3 px-2"><i class="fa-regular fa-clock"></i><span>データ更新: {{ tabUpdatedTimes.dead }}</span></div>
+          <div class="flex flex-wrap items-center gap-2 mb-3"><span class="text-xs font-semibold text-gray-400 mr-1">並び替え：</span><button v-for="opt in rdSortOptions" :key="opt.value" @click="deadSort=opt.value" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="deadSort===opt.value?'bg-purple-600 text-white border-purple-600 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-purple-400 hover:text-purple-600'"><i :class="opt.icon" class="mr-1"></i>{{ opt.label }}</button></div>
+          <div class="relative mb-4"><i class="fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i><input v-model="deadFilterStr" type="text" placeholder="棚番・薬品名で絞り込み..." class="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-purple-400 bg-white" /><button v-if="deadFilterStr" @click="deadFilterStr=''" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors"><i class="fa-solid fa-xmark text-sm"></i></button></div>
+          <div class="glass-card rounded-xl overflow-hidden shadow-sm"><div v-for="(item,i) in filteredDeadData" :key="i" class="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-purple-50 transition-colors fade-in" :style="'animation-delay:'+(i*0.02)+'s'"><div class="flex-1 min-w-0 mr-3"><div class="font-bold text-gray-800 text-base truncate">{{ item.name }}</div><div class="flex flex-wrap items-center gap-2 mt-1"><div class="text-xs text-gray-500 flex items-center gap-1 font-medium bg-gray-100 w-fit px-2 py-0.5 rounded"><i class="fa-solid fa-layer-group text-xs text-purple-500"></i> {{ item.shelf!==""?item.shelf:"-" }}</div><div v-if="item.priceStr" class="text-[10px] text-gray-400 font-medium">薬価: {{ item.priceStr }}</div><div v-if="item.lot" class="text-[10px] text-indigo-600 flex items-center gap-1 font-medium bg-indigo-50 w-fit px-2 py-0.5 rounded border border-indigo-100"><i class="fa-solid fa-barcode text-[9px]"></i> LOT: {{ item.lot }}</div><div v-if="item.supplier" class="text-[10px] text-emerald-600 flex items-center gap-1 font-medium bg-emerald-50 w-fit px-2 py-0.5 rounded border border-emerald-100"><i class="fa-solid fa-truck text-[9px]"></i> 卸: {{ item.supplier }}</div><div v-if="item.lastPurchaseDate" class="text-[10px] text-amber-600 flex items-center gap-1 font-medium bg-amber-50 w-fit px-2 py-0.5 rounded border border-amber-100"><i class="fa-regular fa-calendar-check text-[9px]"></i> 購入: {{ item.lastPurchaseDate }}</div></div></div><div class="shrink-0 flex items-center gap-3"><div v-if="item.stockValueStr" class="text-right"><div class="text-[10px] text-gray-400 font-bold uppercase">在庫金額</div><div class="text-sm font-bold text-gray-600">{{ item.stockValueStr }}</div></div><div class="shrink-0 text-center bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100 min-w-[60px]"><div class="text-[10px] text-gray-400 font-bold mb-0.5 uppercase tracking-wide">在庫</div><div class="text-xl font-black text-gray-700">{{ item.stock!==""?item.stock:"-" }}</div></div></div></div></div>
+        </div>
+        <div v-else-if="!deadLoading" class="glass-card rounded-2xl p-10 text-center text-gray-400"><i class="fa-solid fa-ghost text-4xl mb-4 opacity-20 block"></i><p>不動在庫はありません</p></div>
+      </div>
+    </div>
+
+    <!-- ===== 期限管理タブ ===== -->
+    <div v-if="activeTab==='expiry'">
+      <div v-if="expiryLoading" class="glass-card rounded-2xl p-12 text-center"><i class="fa-solid fa-circle-notch spinner text-4xl text-orange-400 block mb-4"></i><p class="text-gray-400">期限データを読み込み中...</p></div>
+      <div v-else-if="expiryError" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg flex items-start"><i class="fa-solid fa-triangle-exclamation text-red-500 mt-1 mr-3"></i><p class="text-red-700">{{ expiryError }}</p></div>
+      <div v-else>
+        <div class="grid grid-cols-2 gap-3 mb-4">
+          <div class="glass-card rounded-xl p-4 text-center border-l-4 border-red-500 cursor-pointer" @click="expirySubTab='expired'" :class="expirySubTab==='expired'?'ring-2 ring-red-300':''">
+            <div class="text-3xl font-black text-red-600">{{ expiryExpiredItems.length }}</div>
+            <div class="text-xs font-semibold text-gray-500 mt-1 flex items-center justify-center gap-1"><i class="fa-solid fa-circle-xmark text-red-400"></i> 期限切れ</div>
+          </div>
+          <div class="glass-card rounded-xl p-4 text-center border-l-4 border-orange-400 cursor-pointer" @click="expirySubTab='near'" :class="expirySubTab==='near'?'ring-2 ring-orange-300':''">
+            <div class="text-3xl font-black text-orange-500">{{ expiryNearItems.length }}</div>
+            <div class="text-xs font-semibold text-gray-500 mt-1 flex items-center justify-center gap-1"><i class="fa-solid fa-hourglass-half text-orange-400"></i> 期限切迫（半年以内）</div>
+          </div>
+        </div>
+        <div class="exp-sub-bar">
+          <button class="exp-sub-btn exp-sub-expired" :class="{active:expirySubTab==='expired'}" @click="expirySubTab='expired'"><i class="fa-solid fa-circle-xmark"></i><span>期限切れ</span><span class="text-[10px] font-bold opacity-80">{{ expiryExpiredItems.length }}件</span></button>
+          <button class="exp-sub-btn exp-sub-near" :class="{active:expirySubTab==='near'}" @click="expirySubTab='near'"><i class="fa-solid fa-hourglass-half"></i><span>期限切迫（半年以内）</span><span class="text-[10px] font-bold opacity-80">{{ expiryNearItems.length }}件</span></button>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <span class="text-xs font-semibold text-gray-400 mr-1">並び替え：</span>
+          <button v-for="opt in expirySortOptions" :key="opt.value" @click="expirySort=opt.value" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="expirySort===opt.value?(expirySubTab==='expired'?'bg-red-600 text-white border-red-600 shadow-sm':'bg-orange-600 text-white border-orange-600 shadow-sm'):'bg-white text-gray-500 border-gray-200 hover:border-orange-400 hover:text-orange-600'"><i :class="opt.icon" class="mr-1"></i>{{ opt.label }}</button>
+        </div>
+        <div class="relative mb-4"><i class="fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i><input v-model="expiryFilterStr" type="text" placeholder="棚番・薬品名で絞り込み..." class="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-orange-400 bg-white" /><button v-if="expiryFilterStr" @click="expiryFilterStr=''" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors"><i class="fa-solid fa-xmark text-sm"></i></button></div>
+        <div v-if="filteredExpiryItems.length>0" class="glass-card rounded-xl overflow-hidden shadow-sm">
+          <div v-for="(item,i) in filteredExpiryItems" :key="i" class="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 transition-colors fade-in" :class="expirySubTab==='expired'?'hover:bg-red-50':'hover:bg-orange-50'" :style="'animation-delay:'+(i*0.02)+'s'">
+            <div class="flex-1 min-w-0 mr-3">
+              <div class="font-bold text-gray-800 text-base truncate">{{ item.name }}</div>
+              <div class="flex items-center gap-2 mt-1">
+                <div class="text-xs text-gray-500 flex items-center gap-1 font-medium bg-gray-100 w-fit px-2 py-0.5 rounded"><i class="fa-solid fa-layer-group text-xs" :class="expirySubTab==='expired'?'text-red-500':'text-orange-500'"></i> {{ item.shelf || "-" }}</div>
+                <div v-if="item.expiryDate" class="text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1" :class="expirySubTab==='expired'?'bg-red-100 text-red-700':'bg-orange-100 text-orange-700'"><i class="fa-solid fa-calendar-xmark"></i> {{ item.expiryDate }}</div>
+                <div v-if="item.priceStr" class="text-[10px] text-gray-400 font-medium">薬価: {{ item.priceStr }}</div>
+              </div>
+            </div>
+            <div class="shrink-0 flex items-center gap-3">
+              <div v-if="item.stockValueStr" class="text-right"><div class="text-[10px] text-gray-400 font-bold uppercase">在庫金額</div><div class="text-sm font-bold text-gray-600">{{ item.stockValueStr }}</div></div>
+              <div class="shrink-0 text-center px-3 py-1.5 rounded-lg border min-w-[60px]" :class="expirySubTab==='expired'?'bg-red-50 border-red-100':'bg-orange-50 border-orange-100'">
+                <div class="text-[10px] font-bold mb-0.5 uppercase tracking-wide" :class="expirySubTab==='expired'?'text-red-400':'text-orange-400'">在庫</div>
+                <div class="text-xl font-black" :class="expirySubTab==='expired'?'text-red-700':'text-orange-700'">{{ item.stock!==""?item.stock:"-" }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-else class="glass-card rounded-2xl p-10 text-center text-gray-400"><i class="fa-solid fa-circle-check text-4xl mb-4 opacity-20 block text-green-400"></i><p>{{ expirySubTab==='expired'?'期限切れの薬品はありません':'期限切迫の薬品はありません' }}</p></div>
+      </div>
+    </div>
+
+    <!-- ===== RTタブ ===== -->
+    <div v-if="activeTab==='receive'">
+      <div v-if="receiveLoading" class="glass-card rounded-2xl p-12 text-center">
+        <i class="fa-solid fa-circle-notch spinner text-4xl text-emerald-500 block mb-4"></i>
+        <p class="text-gray-400">納品履歴を取中...</p>
+      </div>
+      <div v-else-if="receiveError" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg">
+        <p class="text-red-700 font-semibold"><i class="fa-solid fa-triangle-exclamation mr-2"></i>{{ receiveError }}</p>
+      </div>
+      <div v-else>
+        <!-- ヘッダー -->
+        <div class="flex justify-between items-center mb-1 px-1">
+          <h2 class="text-lg font-bold text-emerald-700 flex items-center gap-2">
+            <i class="fa-solid fa-box-open"></i> 納品サマリー
+          </h2>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-medium bg-emerald-100 text-emerald-800 py-1 px-3 rounded-full">{{ filteredReceiveData.length }}件</span>
+            <button @click="loadReceiveData(true)" class="text-xs text-emerald-600 hover:text-emerald-800 flex items-center gap-1 border border-emerald-200 rounded-lg px-3 py-1.5 hover:bg-emerald-50 transition-colors">
+              <i class="fa-solid fa-arrows-rotate"></i> 更新
+            </button>
+          </div>
+        </div>
+        <div v-if="tabUpdatedTimes.receive_history" class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-3 px-1">
+          <i class="fa-regular fa-clock"></i>
+          <span>データ更新: {{ tabUpdatedTimes.receive_history }}</span>
+        </div>
+        <!-- 絞り込み -->
+        <div class="relative mb-4">
+          <i class="fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i>
+          <input v-model="receiveFilterStr" type="text" placeholder="取引先や医薬品名で絞り込み..."
+            class="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-emerald-400 bg-white" />
+          <button v-if="receiveFilterStr" @click="receiveFilterStr=''" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors">
+            <i class="fa-solid fa-xmark text-sm"></i>
+          </button>
+        </div>
+        <!-- リスト -->
+        <div class="space-y-3 mb-6">
+          <div v-for="(group, i) in filteredReceiveData" :key="'rcv'+i" class="glass-card rounded-xl overflow-hidden shadow-sm fade-in" :style="'animation-delay:'+(i*0.04)+'s'">
+            <button class="w-full flex items-center justify-between px-4 py-3 bg-white hover:bg-emerald-50 transition-colors text-left border-b border-gray-100" @click="toggleReceiveGroup(group)">
+              <div class="flex items-center gap-4">
+                <div class="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex flex-col items-center justify-center shrink-0">
+                  <span class="text-[10px] opacity-70 mb-0.5 leading-none">{{ group.receiveDate.substring(0, 4) }}</span>
+                  <span class="text-sm font-bold leading-none tracking-tighter">{{ group.receiveDate.substring(5) }}</span>
+                </div>
+                <div>
+                  <div class="font-bold text-gray-800 text-base flex items-center gap-1.5"><i class="fa-solid fa-truck text-emerald-500 text-xs"></i>{{ group.wholesaler }}</div>
+                  <div class="text-xs text-gray-500 flex items-center gap-2 mt-1">
+                    <span class="bg-gray-100 px-2 py-0.5 rounded font-medium"><i class="fa-solid fa-pills text-gray-400 mr-1"></i>{{ group.items.length }} 品目</span>
+                    <span class="bg-gray-100 px-2 py-0.5 rounded font-medium"><i class="fa-solid fa-cubes text-gray-400 mr-1"></i>計 {{ group.totalQuantity }}</span>
+                  </div>
+                </div>
+              </div>
+              <i class="fa-solid transition-transform duration-200 text-emerald-400" :class="group.isOpen ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+            </button>
+            <div v-if="group.isOpen" class="bg-emerald-50/30 p-2">
+              <div v-for="(item, j) in group.items" :key="'ritem'+j" class="flex items-center justify-between px-3 py-2 bg-white rounded-lg mb-1.5 last:mb-0 border border-emerald-100 shadow-sm">
+                <div class="flex-1 min-w-0 mr-3">
+                  <div class="font-semibold text-gray-800 text-sm truncate">{{ item.name }}</div>
+                </div>
+                <div class="shrink-0 flex items-center gap-3">
+                  <div class="text-right">
+                    <div class="text-[10px] text-gray-400 font-bold uppercase mb-0.5">納品</div>
+                    <div class="text-sm font-black text-emerald-600">+{{ item.quantity }}</div>
+                  </div>
+                  <div v-if="item.stockBalance !== undefined && item.stockBalance !== null && item.stockBalance !== ''" class="text-right border-l pl-3 border-gray-100 min-w-[50px]">
+                    <div class="text-[10px] text-gray-400 font-bold uppercase mb-0.5">残高</div>
+                    <div class="text-sm font-bold text-gray-700">{{ item.stockBalance }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 履歴タブ ===== -->
+    <div v-if="activeTab==='history'">
+      <div v-if="historyLoading" class="glass-card rounded-2xl p-12 text-center">
+        <i class="fa-solid fa-circle-notch spinner text-4xl text-cyan-500 block mb-4"></i>
+        <p class="text-gray-400">発注履歴を取得中...</p>
+      </div>
+      <div v-else-if="historyError" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg">
+        <p class="text-red-700 font-semibold"><i class="fa-solid fa-triangle-exclamation mr-2"></i>{{ historyError }}</p>
+      </div>
+      <div v-else>
+        <!-- ヘッダー -->
+        <div class="flex justify-between items-center mb-1 px-1">
+          <h2 class="text-lg font-bold text-cyan-700 flex items-center gap-2">
+            <i class="fa-solid fa-clock-rotate-left"></i> 発注履歴
+          </h2>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-medium bg-cyan-100 text-cyan-800 py-1 px-3 rounded-full">{{ historyFilteredTotal }}件</span>
+            <button @click="loadHistoryData(true)" class="text-xs text-cyan-600 hover:text-cyan-800 flex items-center gap-1 border border-cyan-200 rounded-lg px-3 py-1.5 hover:bg-cyan-50 transition-colors">
+              <i class="fa-solid fa-arrows-rotate"></i> 更新
+            </button>
+          </div>
+        </div>
+        <div v-if="tabUpdatedTimes.history" class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-3 px-1">
+          <i class="fa-regular fa-clock"></i>
+          <span>データ更新: {{ tabUpdatedTimes.history }}</span>
+        </div>
+
+        <!-- ── システムサブタブ（MedOrder / OrderEpi） ── -->
+        <div class="hist-sub-bar">
+          <button
+            class="hist-sub-btn hist-sub-medorder"
+            :class="{ active: historySystem==='MedOrder' }"
+            @click="historySystem='MedOrder'">
+            <i class="fa-solid fa-hospital text-base"></i>
+            <span>MedOrder</span>
+            <span class="text-[10px] font-bold opacity-80">{{ medorderCount }}件</span>
+          </button>
+          <button
+            class="hist-sub-btn hist-sub-orderepi"
+            :class="{ active: historySystem==='OrderEPI' }"
+            @click="historySystem='OrderEPI'">
+            <i class="fa-solid fa-capsules text-base"></i>
+            <span>OrderEpi</span>
+            <span class="text-[10px] font-bold opacity-80">{{ orderepiCount }}件</span>
+          </button>
+        </div>
+
+        <!-- ── 発注先フィルター（メディセオ / アルフレッサ / スズケン） ── -->
+        <div class="glass-card rounded-xl p-3 mb-3">
+          <div class="text-xs font-semibold text-gray-400 mb-2 flex items-center gap-1.5">
+            <i class="fa-solid fa-truck text-gray-300"></i> 発注先
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button @click="historySupplier=''"
+              class="sup-btn sup-btn-all" :class="{ active: historySupplier==='' }">
+              すべて
+            </button>
+            <button @click="historySupplier='メディセオ'"
+              class="sup-btn sup-btn-mediseio" :class="{ active: historySupplier==='メディセオ' }">
+              <i class="fa-solid fa-circle mr-1 text-[8px]"></i>メディセオ
+            </button>
+            <button @click="historySupplier='アルフレッサ'"
+              class="sup-btn sup-btn-alfresa" :class="{ active: historySupplier==='アルフレッサ' }">
+              <i class="fa-solid fa-circle mr-1 text-[8px]"></i>アルフレッサ
+            </button>
+            <button @click="historySupplier='スズケン'"
+              class="sup-btn sup-btn-suzuken" :class="{ active: historySupplier==='スズケン' }">
+              <i class="fa-solid fa-circle mr-1 text-[8px]"></i>スズケン
+            </button>
+            <button @click="historySupplier='東邦'"
+              class="sup-btn sup-btn-toho" :class="{ active: historySupplier==='東邦' }">
+              <i class="fa-solid fa-circle mr-1 text-[8px]"></i>東邦
+            </button>
+          </div>
+        </div>
+
+        <!-- ── ステータスフィルター ── -->
+        <div class="glass-card rounded-xl p-3 mb-3">
+          <div class="text-xs font-semibold text-gray-400 mb-2 flex items-center gap-1.5">
+            <i class="fa-solid fa-tag text-gray-300"></i> ステータス
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button @click="historyStatus=''" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="historyStatus===''?'bg-gray-700 text-white border-gray-700':'bg-white text-gray-500 border-gray-200 hover:border-gray-400'">すべて</button>
+            <button @click="historyStatus='完了'" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="historyStatus==='完了'?'bg-green-600 text-white border-green-600':'bg-white text-gray-500 border-gray-200 hover:border-green-400 hover:text-green-600'"><i class="fa-solid fa-circle-check mr-1"></i>完了</button>
+            <button @click="historyStatus='処理中'" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="historyStatus==='処理中'?'bg-cyan-600 text-white border-cyan-600':'bg-white text-gray-500 border-gray-200 hover:border-cyan-400 hover:text-cyan-600'"><i class="fa-solid fa-hourglass-half mr-1"></i>処理中</button>
+            <button @click="historyStatus='キャンセル'" class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all" :class="historyStatus==='キャンセル'?'bg-gray-500 text-white border-gray-500':'bg-white text-gray-500 border-gray-200 hover:border-gray-400'"><i class="fa-solid fa-ban mr-1"></i>キャンセル</button>
+          </div>
+        </div>
+
+        <!-- ── 並び替え ── -->
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <span class="text-xs font-semibold text-gray-400 mr-1">並び替え：</span>
+          <button v-for="opt in historySortOptions" :key="opt.value" @click="historySort=opt.value"
+            class="text-xs font-semibold px-3 py-2 rounded-lg border transition-all"
+            :class="historySort===opt.value?'bg-cyan-600 text-white border-cyan-600 shadow-sm':'bg-white text-gray-500 border-gray-200 hover:border-cyan-400 hover:text-cyan-600'">
+            <i :class="opt.icon" class="mr-1"></i>{{ opt.label }}
+          </button>
+        </div>
+
+        <!-- ── 絞り込みフィールド ── -->
+        <div class="relative mb-4">
+          <i class="fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i>
+          <input v-model="historyFilterStr" type="text" placeholder="薬品名・メーカーで絞り込み..."
+            class="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-cyan-400 bg-white" />
+          <button v-if="historyFilterStr" @click="historyFilterStr=''" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors">
+            <i class="fa-solid fa-xmark text-sm"></i>
+          </button>
+        </div>
+
+        <!-- ── リスト ── -->
+        <div v-if="filteredHistoryData.length>0" class="glass-card rounded-xl overflow-hidden shadow-sm">
+          <div v-for="(item,i) in filteredHistoryData" :key="i"
+            class="px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-cyan-50/50 transition-colors fade-in"
+            :style="'animation-delay:'+(i*0.02)+'s'">
+
+            <div class="flex items-start gap-3">
+              <!-- 左: 薬品情報 -->
+              <div class="flex-1 min-w-0">
+                <div class="font-bold text-gray-800 text-sm leading-snug mb-1.5 break-words">{{ item.name }}</div>
+                <div class="flex flex-wrap gap-1.5">
+
+                  <!-- システムバッジ -->
+                  <span v-if="item.source==='MedOrder'"
+                    class="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                    style="background:#cffafe;color:#0e7490;border:1px solid #a5f3fc;">
+                    <i class="fa-solid fa-hospital text-[9px]"></i> MedOrder
+                  </span>
+                  <span v-else-if="item.source==='OrderEPI'"
+                    class="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                    style="background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;">
+                    <i class="fa-solid fa-capsules text-[9px]"></i> OrderEpi
+                  </span>
+
+                  <!-- 発注先バッジ（色分け） -->
+                  <span v-if="item.supplier"
+                    class="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                    :class="supplierBadgeClass(item.supplier)">
+                    <i class="fa-solid fa-truck text-[9px]"></i> {{ item.supplier }}
+                  </span>
+
+                  <!-- メーカー -->
+                  <span v-if="item.maker" class="inline-flex items-center gap-1 text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full">
+                    <i class="fa-solid fa-industry text-[9px]"></i> {{ item.maker }}
+                  </span>
+
+                  <!-- 日付 -->
+                  <span class="inline-flex items-center gap-1 text-[10px] text-gray-400 bg-gray-50 border border-gray-100 px-1.5 py-0.5 rounded-full">
+                    <i class="fa-regular fa-calendar text-[9px]"></i> {{ formatHistoryDate(item.orderDate) }}
+                  </span>
+
+                  <!-- ステータス -->
+                  <span v-if="item.status"
+                    class="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                    :class="statusBadgeClass(item.status)">
+                    <i class="fa-solid fa-circle text-[6px]"></i> {{ item.status }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- 右: 発注数 -->
+              <div class="shrink-0 text-center rounded-xl border min-w-[54px] px-2 py-1.5"
+                style="background:#f8fafc;border-color:#e2e8f0;">
+                <div class="text-[10px] text-gray-400 font-bold mb-0.5">発注数</div>
+                <div class="text-xl font-black text-gray-800 leading-none">{{ item.quantity||'-' }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-else-if="historyData.length===0" class="glass-card rounded-2xl p-10 text-center text-gray-400">
+          <i class="fa-solid fa-clock-rotate-left text-4xl opacity-20 block mb-4"></i>
+          <p>発注履歴がありません。</p>
+        </div>
+        <div v-else class="glass-card rounded-2xl p-8 text-center text-gray-400">
+          <i class="fa-solid fa-filter text-3xl opacity-20 block mb-3"></i>
+          <p>絞り込み条件に一致する履歴はありません</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 未納未定タブ ===== -->
+    <div v-if="activeTab==='pending'">
+      <div v-if="pendingLoading" class="glass-card rounded-2xl p-12 text-center">
+        <i class="fa-solid fa-circle-notch spinner text-4xl text-orange-500 block mb-4"></i>
+        <p class="text-gray-400">未納未定データを取得中...</p>
+      </div>
+      <div v-else-if="pendingError" class="bg-red-50 border-l-4 border-red-500 p-4 mb-4 rounded-r-lg">
+        <p class="text-red-700 font-semibold"><i class="fa-solid fa-triangle-exclamation mr-2"></i>{{ pendingError }}</p>
+      </div>
+      <div v-else>
+        <div class="flex justify-between items-center mb-1 px-1">
+          <h2 class="text-lg font-bold text-orange-700 flex items-center gap-2">
+            <i class="fa-solid fa-truck-ramp-box"></i> 未納未定 (Pharma Dashboard)
+          </h2>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-medium bg-orange-100 text-orange-800 py-1 px-3 rounded-full">{{ pendingData.length }}件</span>
+            <button @click="loadPendingData(true)" class="text-xs text-orange-600 hover:text-orange-800 flex items-center gap-1 border border-orange-200 rounded-lg px-3 py-1.5 hover:bg-orange-50 transition-colors">
+              <i class="fa-solid fa-arrows-rotate"></i> 更新
+            </button>
+          </div>
+        </div>
+        <div class="relative mb-4 mt-3">
+          <i class="fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-sm"></i>
+          <input v-model="pendingFilterStr" type="text" placeholder="薬品名や卸名で絞り込み..."
+            class="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-orange-400 bg-white" />
+          <button v-if="pendingFilterStr" @click="pendingFilterStr=''" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-red-400 transition-colors">
+            <i class="fa-solid fa-xmark text-sm"></i>
+          </button>
+        </div>
+        
+        <div v-if="groupedPendingData.length > 0" class="grid grid-cols-1 md:grid-cols-3 gap-5 items-start">
+          <div v-for="group in groupedPendingData" :key="group.supplier" class="flex flex-col h-full">
+            <div class="flex items-center gap-2 mb-2 px-1">
+              <span class="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full shadow-sm"
+                :class="{ 'bg-red-100 text-red-700 border border-red-300': group.supplier==='Medipal', 'bg-blue-100 text-blue-700 border border-blue-300': group.supplier==='Alf', 'bg-emerald-100 text-emerald-700 border border-emerald-300': group.supplier==='Collabo', 'bg-gray-100 text-gray-600 border border-gray-200': !['Medipal','Alf','Collabo'].includes(group.supplier) }">
+                <i class="fa-solid fa-truck text-[10px]"></i> {{ group.supplier }}
+              </span>
+              <span class="text-[10px] text-gray-500 font-bold bg-white px-1.5 py-0.5 rounded-full border border-gray-200">{{ group.items.length }}件</span>
+            </div>
+            <div class="glass-card rounded-xl overflow-hidden shadow-sm flex-1">
+              <div v-for="(item,i) in group.items" :key="i"
+                class="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0 transition-colors fade-in"
+                :class="{ 'hover:bg-red-50 border-l-4 border-l-red-300': group.supplier==='Medipal', 'hover:bg-blue-50 border-l-4 border-l-blue-300': group.supplier==='Alf', 'hover:bg-emerald-50 border-l-4 border-l-emerald-300': group.supplier==='Collabo', 'hover:bg-orange-50': !['Medipal','Alf','Collabo'].includes(group.supplier) }"
+                :style="'animation-delay:'+(i*0.02)+'s'">
+                <div class="flex-1 min-w-0 mr-3">
+                  <div class="font-bold text-gray-800 text-base leading-tight">{{ item['品名'] || item.name || '-' }}</div>
+                  <div class="flex items-center gap-2 mt-1.5 flex-wrap">
+                    <span v-if="item['日付']" class="inline-flex items-center gap-1 text-[10px] text-gray-500 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded-full whitespace-nowrap">
+                      <i class="fa-regular fa-clock text-[9px]"></i> 確認: {{ formatPendingDate(item['日付']) }}
+                    </span>
+                    <span v-if="item['ステータス'] || item.status"
+                      class="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap"
+                      :class="{ 'bg-red-100 text-red-700 border border-red-200': (item['ステータス']||item.status||'').includes('停止') || (item['ステータス']||item.status||'').includes('調整') || (item['ステータス']||item.status||'').includes('辞退'), 'bg-amber-100 text-amber-700 border border-amber-200': (item['ステータス']||item.status||'').includes('未定') || (item['ステータス']||item.status||'').includes('調達'), 'bg-orange-100 text-orange-700 border border-orange-200': !(item['ステータス']||item.status||'').includes('停止') && !(item['ステータス']||item.status||'').includes('調整') && !(item['ステータス']||item.status||'').includes('辞退') && !(item['ステータス']||item.status||'').includes('未定') && !(item['ステータス']||item.status||'').includes('調達') }">
+                      <i class="fa-solid fa-triangle-exclamation text-[9px]"></i> {{ item['ステータス'] || item.status }}
+                    </span>
+                  </div>
+                </div>
+                <div class="shrink-0 flex items-center gap-3">
+                  <div class="text-center px-3 py-1.5 rounded-lg border min-w-[50px]"
+                    :class="{ 'bg-red-50 border-red-100': group.supplier==='Medipal', 'bg-blue-50 border-blue-100': group.supplier==='Alf', 'bg-emerald-50 border-emerald-100': group.supplier==='Collabo', 'bg-orange-50 border-orange-100': !['Medipal','Alf','Collabo'].includes(group.supplier) }">
+                    <div class="text-[10px] text-gray-500 font-bold mb-0.5 uppercase">数量</div>
+                    <div class="text-xl font-black"
+                      :class="{ 'text-red-700': group.supplier==='Medipal', 'text-blue-700': group.supplier==='Alf', 'text-emerald-700': group.supplier==='Collabo', 'text-gray-800': !['Medipal','Alf','Collabo'].includes(group.supplier) }">{{ item['数量'] || item.qty || '-' }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="groupedPendingData.length === 0" class="p-8 text-center text-gray-400">
+          <i class="fa-solid fa-box-open text-3xl opacity-20 block mb-3"></i>
+          <p>未納未定のデータはありません</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== マイナス在庫タブ ===== -->
+    <div v-if="activeTab==='minus'">
+      <div v-if="minusLoading" class="glass-card rounded-2xl p-12 text-center"><i class="fa-solid fa-circle-notch spinner text-4xl text-rose-400 block mb-4"></i><p class="text-gray-400">MedOrderからマイナス在庫を取得中...</p></div>
+      <div v-else-if="minusError" class="glass-card rounded-2xl p-8 mb-4 fade-in flex flex-col items-center text-center">
+        <div class="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mb-4">
+          <i class="fa-solid fa-key text-2xl text-amber-400"></i>
+        </div>
+        <h3 class="text-base font-bold text-gray-800 mb-1">再認証が必要です</h3>
+        <p class="text-sm text-gray-500 mb-4">MedOrderのアクセストークンが期限切れのため、マイナス在庫データを取得できませんでした。</p>
+        <button @click="requestTokenRefresh()" :disabled="tokenRefreshState==='requesting'||tokenRefreshState==='done'"
+          class="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm transition-all mb-3"
+          :class="tokenRefreshState==='done' ? 'bg-green-100 text-green-700 border border-green-300' : tokenRefreshState==='error' ? 'bg-red-100 text-red-700 border border-red-300' : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-md hover:shadow-lg'">
+          <i :class="tokenRefreshState==='requesting' ? 'fa-solid fa-circle-notch spinner' : tokenRefreshState==='done' ? 'fa-solid fa-check' : tokenRefreshState==='error' ? 'fa-solid fa-triangle-exclamation' : 'fa-solid fa-arrows-rotate'"></i>
+          <span>{{ tokenRefreshState==='requesting' ? '要求中...' : tokenRefreshState==='done' ? '要求しました！daemonが実行します' : tokenRefreshState==='error' ? '失敗しました' : '🔄 トークン更新を要求' }}</span>
+        </button>
+        <details class="text-left w-full max-w-xs">
+          <summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-600">手動実行の場合</summary>
+          <div class="bg-gray-50 border border-gray-200 rounded-xl px-5 py-3 text-xs font-mono text-gray-600 mt-2">
+            <span class="text-gray-400 select-none">$ </span>python extract_data.py
+          </div>
+        </details>
+      </div>
+      <div v-else>
+        <div class="flex items-center justify-between mb-2 px-1">
+          <h2 class="text-sm font-bold text-rose-700 flex items-center gap-2"><i class="fa-solid fa-circle-minus"></i> マイナス在庫一覧</h2>
+          <div class="flex items-center gap-2"><span class="text-xs font-bold bg-rose-100 text-rose-700 rounded-full px-3 py-0.5">{{ minusData.length }}件</span><button @click="loadMinusData()" :disabled="minusLoading" class="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-rose-200 text-rose-600 bg-white hover:bg-rose-50 transition-all disabled:opacity-40"><i class="fa-solid fa-arrows-rotate text-xs" :class="minusLoading?'spinner':''"></i> 更新</button></div>
+        </div>
+        <div class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-4 px-1">
+          <i class="fa-regular fa-clock"></i>
+          <span>リアルタイム (MedOrder API)</span>
+        </div>
+
+        <!-- 発注状況サマリーカード -->
+        <div v-if="minusData.length>0" class="grid grid-cols-2 gap-3 mb-4">
+          <div class="glass-card rounded-xl p-3 text-center border-l-4 border-red-500 cursor-pointer hover:shadow-md transition-shadow" @click="minusOrderFilter=minusOrderFilter==='unordered'?'':'unordered'" :class="minusOrderFilter==='unordered'?'ring-2 ring-red-300':''">
+            <div class="text-2xl font-black text-red-600">{{ minusUnorderedCount }}</div>
+            <div class="text-[10px] font-bold text-red-500 mt-0.5 flex items-center justify-center gap-1"><i class="fa-solid fa-circle-exclamation"></i> 未発注</div>
+          </div>
+          <div class="glass-card rounded-xl p-3 text-center border-l-4 border-emerald-500 cursor-pointer hover:shadow-md transition-shadow" @click="minusOrderFilter=minusOrderFilter==='ordered'?'':'ordered'" :class="minusOrderFilter==='ordered'?'ring-2 ring-emerald-300':''">
+            <div class="text-2xl font-black text-emerald-600">{{ minusOrderedCount }}</div>
+            <div class="text-[10px] font-bold text-emerald-500 mt-0.5 flex items-center justify-center gap-1"><i class="fa-solid fa-circle-check"></i> 発注済</div>
+          </div>
+        </div>
+
+        <div v-if="minusData.length===0" class="glass-card rounded-2xl p-10 text-center text-gray-400"><i class="fa-solid fa-circle-check text-4xl mb-4 opacity-20 block text-green-400"></i><p>マイナス在庫の薬品はありません</p></div>
+        <div v-else class="space-y-2">
+          <div v-for="(item,i) in filteredMinusData" :key="'m'+i" class="glass-card rounded-xl p-5 border-l-4 hover:shadow-md transition-shadow fade-in" :class="!item.isOrdered?'border-red-400':'border-emerald-500'" :style="'animation-delay:'+(i*0.04)+'s'">
+            <div class="flex justify-between items-start gap-4 mb-3">
+              <div class="flex-1 min-w-0 pr-2 pb-1 sm:pb-0">
+                <div class="flex items-center gap-2 mb-1 flex-wrap">
+                  <span class="text-xs text-rose-500 font-bold tracking-wider uppercase">薬品名</span>
+                  <!-- 発注ステータスタグ -->
+                  <span v-if="item.isOrdered && (item.orderSource === 'OrderEPI' || item.orderSource === 'Collabo Portal' || item.orderSource === 'Pharma Dashboard') && item.deliveryDate" class="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5">
+                    <i class="fa-solid fa-truck-fast mr-1"></i>納品予定: {{ item.deliveryDate }} <span class="font-normal opacity-70">({{ item.orderSource }})</span>
+                  </span>
+                  <span v-else-if="item.isOrdered && (item.orderSource === 'OrderEPI' || item.orderSource === 'Collabo Portal' || item.orderSource === 'Pharma Dashboard')" class="text-[10px] font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded px-1.5 py-0.5">
+                    <i class="fa-regular fa-clock mr-1"></i>納品予定: 取得前 <span class="font-normal opacity-70">({{ item.orderSource }})</span>
+                  </span>
+                  <span v-else-if="item.isOrdered" class="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">
+                    <i class="fa-solid fa-circle-check mr-1"></i>発注済
+                    <span v-if="item.orderSource" class="font-normal opacity-70">({{ item.orderSource }})</span>
+                    <span v-if="item.orderSupplier" class="font-normal opacity-70">/ {{ item.orderSupplier }}</span>
+                  </span>
+                  <span v-else class="text-[10px] font-bold text-red-700 bg-red-100 border border-red-300 rounded px-1.5 py-0.5 minus-unordered-pulse">
+                    <i class="fa-solid fa-circle-exclamation mr-1"></i>未発注
+                  </span>
+                  <span v-if="item.lot" class="text-[10px] font-bold text-blue-700 bg-blue-100 border border-blue-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-barcode mr-1"></i>{{ item.lot }}</span>
+                  <span v-if="item.expiry" class="text-[10px] font-bold text-orange-700 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5"><i class="fa-solid fa-calendar mr-1"></i>{{ item.expiry }}</span>
+                  <span v-if="item.last_action" class="text-[10px] font-bold rounded px-1.5 py-0.5 border" :class="item.last_action==='dispense'?'bg-red-50 text-red-500 border-red-200':'bg-green-50 text-green-600 border-green-200'">{{ item.last_action==='dispense'?'払出':item.last_action==='stock'?'入庫':item.last_action }}</span>
+                </div>
+                <h3 class="text-base sm:text-lg font-bold text-gray-900 leading-tight break-words">{{ item.name }}</h3>
+                <div class="flex flex-wrap items-center gap-2 mt-2 mb-1">
+                  <a :href="'https://minkusu.jp/ds/search?s=' + encodeURIComponent(normalizeForSearch(item.name || '')) + '&hd_s1='" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[11px] font-bold rounded transition-colors border border-blue-200">
+                    <i class="fa-solid fa-arrow-up-right-from-square"></i> Minkusuで検索
+                  </a>
+                  <button @click.stop="openTohoEnif(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-purple-600 border border-purple-200 hover:bg-purple-50 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                    <i class="fa-solid fa-box"></i> ENIF小分け
+                  </button>
+                  <button @click.stop="openOrderEpi(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-indigo-600 border border-indigo-200 hover:bg-indigo-50 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                    <i class="fa-solid fa-capsules"></i> EPI発注
+                  </button>
+                  <button @click.stop="openOrderMedorder(item.name)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-cyan-600 border border-cyan-200 hover:bg-cyan-50 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                    <i class="fa-solid fa-hospital"></i> MedOrder
+                  </button>
+                  <button @click.stop="openAdjustModal(item)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap mr-1"><i class="fa-solid fa-pen-to-square"></i> 調整</button>
+                  <button @click.stop="openTransactionHistory(item)" class="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100 font-bold text-[11px] rounded shadow-sm transition-colors whitespace-nowrap">
+                    <i class="fa-solid fa-clock-rotate-left"></i> 入出庫履歴
+                  </button>
+                  <button @click="toggleMemoEdit(item.name)" class="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-bold rounded transition-colors border" :class="memos[item.name]?'bg-yellow-50 text-yellow-700 border-yellow-300 hover:bg-yellow-100':'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'">
+                    <i class="fa-solid fa-note-sticky"></i> {{ memos[item.name] ? 'メモあり' : 'メモ' }}
+                  </button>
+                </div>
+                <div v-if="memos[item.name]&&editingMemo!==item.name" class="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 text-sm text-yellow-800 mt-1 flex items-start gap-2">
+                  <i class="fa-solid fa-note-sticky text-yellow-400 mt-0.5"></i>
+                  <span class="whitespace-pre-wrap break-words flex-1">{{ memos[item.name] }}</span>
+                </div>
+                <div v-if="editingMemo===item.name" class="bg-yellow-50 border border-yellow-300 rounded-lg p-3 mt-1">
+                  <textarea v-model="editingMemoText" rows="2" class="w-full text-sm border border-yellow-200 rounded px-2 py-1.5 outline-none focus:border-yellow-400 bg-white resize-none" placeholder="メモを入力..."></textarea>
+                  <div class="flex gap-2 mt-2">
+                    <button @click="saveMemoAction(item.name)" :disabled="memoSaving" class="text-xs font-bold px-3 py-1.5 bg-yellow-500 text-white rounded hover:bg-yellow-600 transition-colors disabled:opacity-50"><i class="fa-solid fa-check mr-1"></i>保存</button>
+                    <button @click="editingMemo=''" class="text-xs font-bold px-3 py-1.5 bg-gray-200 text-gray-600 rounded hover:bg-gray-300 transition-colors">キャンセル</button>
+                  </div>
+                </div>
+              </div>
+              <div class="shrink-0 flex items-start">
+                <div class="rounded-lg p-2 sm:p-3 min-w-[70px] sm:min-w-[80px] text-center border transition-colors flex flex-col justify-center bg-rose-50 border-rose-200">
+                  <div class="text-[10px] sm:text-xs font-medium mb-1 text-rose-500">
+                    <i class="fa-solid fa-cubes mr-1 text-rose-400"></i>在庫数
+                  </div>
+                  <div class="text-xl sm:text-2xl font-bold text-rose-700">{{ item.quantity }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 未登録薬品（メンテナンス）タブ ===== -->
+    <div v-if="activeTab==='unmatched'">
+      <div v-if="unmatchedLoading" class="glass-card rounded-2xl p-12 text-center">
+        <i class="fa-solid fa-circle-notch spinner text-4xl text-amber-500 block mb-4"></i>
+        <p class="text-gray-400">未登録薬品ログを取得中...</p>
+      </div>
+      <div v-else-if="unmatchedError" class="glass-card rounded-2xl p-8 mb-4 fade-in flex flex-col items-center text-center">
+        <div class="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mb-4">
+          <i class="fa-solid fa-triangle-exclamation text-2xl text-red-500"></i>
+        </div>
+        <h3 class="text-base font-bold text-gray-800 mb-1">エラーが発生しました</h3>
+        <p class="text-sm text-gray-500 mb-4">{{ unmatchedError }}</p>
+        <button @click="loadUnmatchedData" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg shadow">
+          再試行
+        </button>
+      </div>
+      <div v-else>
+        <div class="flex items-center justify-between mb-2 px-1">
+          <h2 class="text-sm font-bold text-amber-700 flex items-center gap-2">
+            <i class="fa-solid fa-triangle-exclamation"></i> 未登録薬品ログ一覧
+          </h2>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-bold bg-amber-100 text-amber-700 rounded-full px-3 py-0.5">{{ unmatchedItems.length }}件</span>
+            <button @click="loadUnmatchedData" :disabled="unmatchedLoading" class="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-amber-200 text-amber-600 bg-white hover:bg-amber-50 transition-all disabled:opacity-40">
+              <i class="fa-solid fa-arrows-rotate text-xs" :class="unmatchedLoading?'spinner':''"></i> 更新
+            </button>
+          </div>
+        </div>
+        <div class="flex items-center gap-1.5 text-[11px] text-gray-400 mb-3 px-1">
+          <i class="fa-regular fa-clock"></i>
+          <span>オンプレミス端末の自動スキャンログ (Supabase)</span>
+        </div>
+
+        <div v-if="unmatchedItems.length > 0" class="flex items-center justify-between bg-amber-50/50 p-2.5 rounded-lg mb-4 border border-amber-100/50 fade-in">
+          <label class="flex items-center gap-2 cursor-pointer ml-1">
+            <input type="checkbox" v-model="selectAllUnmatched" class="w-4 h-4 text-amber-600 border-amber-300 rounded focus:ring-amber-500 bg-white cursor-pointer">
+            <span class="text-xs font-bold text-gray-700">すべて選択</span>
+          </label>
+          <div class="flex items-center gap-3">
+            <span class="text-xs font-bold text-amber-600" v-if="selectedUnmatchedItems.length > 0">{{ selectedUnmatchedItems.length }} 件選択中</span>
+            <button @click="bulkExcludeNoise" :disabled="selectedUnmatchedItems.length === 0" class="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-bold text-xs rounded-lg shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+              <i class="fa-solid fa-trash-can"></i> 一括ノイズ除外
+            </button>
+          </div>
+        </div>
+
+        <div v-if="unmatchedItems.length===0" class="glass-card rounded-2xl p-10 text-center text-gray-400">
+          <i class="fa-solid fa-circle-check text-4xl mb-4 opacity-20 block text-green-400"></i>
+          <p>未登録の薬品ログはありません。すべてマスタ登録済みです。</p>
+        </div>
+        <div v-else class="space-y-3">
+          <div v-for="(item,i) in unmatchedItems" :key="'unmatched-'+item.id" class="glass-card rounded-xl p-5 border-l-4 border-amber-400 hover:shadow-md transition-shadow fade-in flex gap-3 sm:gap-4" :style="'animation-delay:'+(i*0.02)+'s'">
+            <!-- チェックボックス列 -->
+            <div class="flex items-start pt-1.5">
+              <input type="checkbox" :value="item.id" v-model="selectedUnmatchedItems" class="w-5 h-5 text-amber-600 border-gray-300 rounded focus:ring-amber-500 cursor-pointer">
+            </div>
+            <!-- コンテンツ列 -->
+            <div class="flex-1 min-w-0">
+              <div class="flex justify-between items-start gap-4 flex-col sm:flex-row">
+                <div class="flex-1 min-w-0 pr-2">
+                  <div class="flex items-center gap-2 mb-1 flex-wrap">
+                    <span class="text-xs text-amber-600 font-bold tracking-wider uppercase">未登録薬品</span>
+                    <span class="text-[10px] text-gray-500 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded-full">
+                      <i class="fa-solid fa-desktop mr-1 text-gray-400"></i>端末: {{ item.terminal_name || '不明' }}
+                    </span>
+                    <span v-if="item.first_scanned_at" class="text-[10px] text-gray-500 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded-full">
+                      初回: {{ formatHistoryDate(item.first_scanned_at) }}
+                    </span>
+                    <span v-if="item.last_scanned_at" class="text-[10px] text-gray-500 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded-full">
+                      最終: {{ formatHistoryDate(item.last_scanned_at) }}
+                    </span>
+                  </div>
+                  <h3 class="text-base sm:text-lg font-bold text-gray-900 leading-tight break-words mb-2">{{ item.raw_name }}</h3>
+                  <div v-if="item.normalized_name && item.normalized_name !== item.raw_name" class="text-xs text-gray-500 mb-2">
+                    <span class="font-semibold text-gray-400">正規化候補:</span> {{ item.normalized_name }}
+                  </div>
+                </div>
+                <div class="shrink-0 flex items-center gap-2 w-full sm:w-auto justify-end sm:justify-start">
+                  <button @click="openAddUnmatchedModal(item)" class="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-sm transition-colors whitespace-nowrap">
+                    <i class="fa-solid fa-plus-circle"></i> マスタ追加
+                  </button>
+                  <button @click="excludeNoise(item)" class="inline-flex items-center gap-1.5 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-bold text-xs rounded-lg shadow-sm transition-colors whitespace-nowrap">
+                    <i class="fa-solid fa-trash-can"></i> 除外
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    
+    <!-- 在庫調整モーダル -->
+    <div v-if="adjustModalOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900 bg-opacity-50 transition-opacity">
+      <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full overflow-hidden transform transition-all fade-in">
+        <div class="px-5 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
+          <h3 class="text-lg font-bold text-gray-800"><i class="fa-solid fa-pen-to-square text-amber-500 mr-2"></i>実在庫の調整</h3>
+          <button @click="adjustModalOpen=false" class="text-gray-400 hover:text-gray-600 focus:outline-none">
+            <i class="fa-solid fa-xmark text-xl"></i>
+          </button>
+        </div>
+        <div class="p-5">
+          <p class="text-sm text-gray-600 mb-4 font-semibold">{{ adjustModalItem?.name }}</p>
+          <div class="mb-4">
+            <label class="block text-xs font-bold text-gray-500 mb-1">現在のシステム在庫</label>
+            <div class="text-lg font-bold text-gray-800 bg-gray-100 p-2 rounded text-center">{{ adjustModalItem?.stock !== undefined ? adjustModalItem.stock : adjustModalItem?.quantity }}</div>
+          </div>
+          <div class="mb-4">
+            <label class="block text-xs font-bold text-gray-500 mb-1">実際の棚の数 (実在庫)</label>
+            <input type="number" v-model="adjustStockValue" class="w-full border-2 border-amber-200 rounded-lg p-2 text-xl font-bold text-center focus:outline-none focus:border-amber-400">
+          </div>
+          <button @click="submitAdjustment" :disabled="isAdjusting" class="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-4 rounded-lg shadow transition-colors flex items-center justify-center gap-2">
+            <i class="fa-solid fa-check" v-if="!isAdjusting"></i>
+            <i class="fa-solid fa-spinner fa-spin" v-if="isAdjusting"></i>
+            {{ isAdjusting ? '保存中...' : '確定して上書きする' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== マスタ追加モーダル (未登録薬品登録) ===== -->
+    <div v-if="addUnmatchedModalOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900 bg-opacity-50 transition-opacity">
+      <div class="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden transform transition-all fade-in">
+        <div class="px-5 py-4 border-b border-gray-200 flex justify-between items-center bg-emerald-50">
+          <h3 class="text-lg font-bold text-emerald-800"><i class="fa-solid fa-plus-circle text-emerald-600 mr-2"></i>在庫マスタへ追加</h3>
+          <button @click="addUnmatchedModalOpen=false" class="text-gray-400 hover:text-gray-600 focus:outline-none">
+            <i class="fa-solid fa-xmark text-xl"></i>
+          </button>
+        </div>
+        <div class="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
+          <div>
+            <label class="block text-xs font-bold text-gray-500 mb-1">薬品名 (マスタ登録名)</label>
+            <input type="text" v-model="unmatchedForm.name" class="w-full border border-gray-300 rounded-lg p-2 text-sm font-semibold focus:outline-none focus:border-emerald-500">
+            <p class="text-[10px] text-gray-400 mt-1">※ 必要に応じて製品名や規格に修正してください</p>
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-gray-500 mb-1">YJコード (12桁)</label>
+            <input type="text" v-model="unmatchedForm.yjCode" placeholder="例: 1124022F1017" class="w-full border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:border-emerald-500">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-bold text-gray-500 mb-1">棚番</label>
+              <input type="text" v-model="unmatchedForm.shelf" placeholder="例: 汎用左1A" class="w-full border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:border-emerald-500">
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-gray-500 mb-1">単位</label>
+              <input type="text" v-model="unmatchedForm.unit" placeholder="例: 錠, 本, 瓶, G" class="w-full border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:border-emerald-500">
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-gray-500 mb-1">先発 / 後発タイプ</label>
+            <select v-model="unmatchedForm.type" class="w-full border border-gray-300 rounded-lg p-2 text-sm focus:outline-none focus:border-emerald-500">
+              <option value="">(未選択 / 判定なし)</option>
+              <option value="先発品">先発品</option>
+              <option value="後発品">後発品</option>
+              <option value="その他">その他</option>
+            </select>
+          </div>
+          <button @click="submitAddUnmatched" :disabled="isSubmittingUnmatched || !unmatchedForm.name" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-lg shadow transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+            <i class="fa-solid fa-spinner fa-spin" v-if="isSubmittingUnmatched"></i>
+            <i class="fa-solid fa-check" v-else></i>
+            {{ isSubmittingUnmatched ? 'マスタに登録中...' : '確定してスプレッドシートへ追加' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 入出庫履歴モーダル ===== -->
+    <div v-if="histModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-4 transition-all fade-in">
+      <div class="bg-white w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden relative" @click.stop>
+        <div class="px-5 py-4 border-b border-gray-100 flex justify-between items-center bg-emerald-50">
+          <h2 class="text-lg font-bold text-emerald-800 flex items-center gap-2">
+            <i class="fa-solid fa-clock-rotate-left"></i> 入出庫履歴 (半年分)
+          </h2>
+          <button @click="histModalOpen=false" class="w-8 h-8 flex items-center justify-center rounded-full bg-white text-gray-500 hover:text-red-500 hover:bg-red-50 shadow-sm transition-colors">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        <div class="px-5 py-3 bg-white border-b border-gray-100 shadow-sm flex items-center justify-between">
+          <div class="font-bold text-gray-800 text-sm break-words">{{ histModalItem ? histModalItem.name : '' }}</div>
+          <div v-if="histModalData.length>0" class="text-xs font-bold bg-emerald-100 text-emerald-800 px-2 py-1 rounded-lg shrink-0 ml-2">{{ histModalData.length }}件</div>
+        </div>
+        <div v-if="histModalData.length > 0 && !histModalLoading" class="px-5 pt-3 bg-gray-50 flex flex-wrap gap-2 border-b border-gray-200">
+          <button @click="histModalTab='all'" class="px-4 py-2 font-bold text-[11px] sm:text-xs transition-all relative" :class="histModalTab==='all'?'text-emerald-700':'text-gray-500 hover:text-gray-700'">
+            すべて ({{ histModalData.length }})
+            <div v-if="histModalTab==='all'" class="absolute bottom-0 left-0 w-full h-0.5 bg-emerald-500"></div>
+          </button>
+          <button @click="histModalTab='in'" class="px-4 py-2 font-bold text-[11px] sm:text-xs transition-all relative" :class="histModalTab==='in'?'text-emerald-600':'text-gray-500 hover:text-gray-700'">
+            <i class="fa-solid fa-arrow-right-to-bracket mr-1"></i>入庫 ({{ inHistCount }})
+            <div v-if="histModalTab==='in'" class="absolute bottom-0 left-0 w-full h-0.5 bg-emerald-500"></div>
+          </button>
+          <button @click="histModalTab='out'" class="px-4 py-2 font-bold text-[11px] sm:text-xs transition-all relative" :class="histModalTab==='out'?'text-blue-600':'text-gray-500 hover:text-gray-700'">
+            <i class="fa-solid fa-arrow-right-from-bracket mr-1"></i>出庫 ({{ outHistCount }})
+            <div v-if="histModalTab==='out'" class="absolute bottom-0 left-0 w-full h-0.5 bg-blue-500"></div>
+          </button>
+          <button @click="histModalTab='other'" class="px-4 py-2 font-bold text-[11px] sm:text-xs transition-all relative" :class="histModalTab==='other'?'text-amber-600':'text-gray-500 hover:text-gray-700'">
+            <i class="fa-solid fa-box-open mr-1"></i>その他 ({{ otherHistCount }})
+            <div v-if="histModalTab==='other'" class="absolute bottom-0 left-0 w-full h-0.5 bg-amber-500"></div>
+          </button>
+        </div>
+        <div class="p-5 overflow-y-auto flex-1 bg-gray-50/50">
+          <div v-if="histModalLoading" class="flex flex-col items-center justify-center py-10">
+            <i class="fa-solid fa-circle-notch spinner text-3xl text-emerald-500 mb-3"></i>
+            <p class="text-gray-500 text-sm font-medium">履歴データを読み込み中...</p>
+          </div>
+          <div v-else-if="histModalError" class="bg-red-50 text-red-600 p-4 rounded-xl border border-red-100 text-sm font-medium flex items-center gap-2">
+            <i class="fa-solid fa-triangle-exclamation"></i> {{ histModalError }}
+          </div>
+          <div v-else-if="histModalData.length===0" class="flex flex-col items-center justify-center py-10 text-gray-400">
+            <i class="fa-solid fa-box-open text-4xl mb-3 opacity-20"></i>
+            <p class="text-sm font-medium">この薬品の入出庫履歴（過去半年）は見つかりませんでした</p>
+          </div>
+          <div v-else class="space-y-3">
+            <div v-for="(h, i) in filteredHistModalData" :key="i" class="bg-white border border-gray-100 rounded-xl p-3 shadow-sm flex items-center justify-between hover:border-emerald-200 transition-colors">
+              <div>
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="text-xs font-bold px-2 py-0.5 rounded-full" :class="h.transaction_type==='調剤'?'bg-blue-100 text-blue-700':h.transaction_type.includes('納品')?'bg-emerald-100 text-emerald-700':h.transaction_type==='廃棄'?'bg-gray-100 text-gray-600':'bg-amber-100 text-amber-700'">{{ h.transaction_type }}</span>
+                  <span class="text-[11px] text-gray-400 font-medium"><i class="fa-regular fa-clock"></i> {{ formatHistoryDate(h.transaction_date) }}</span>
+                </div>
+                <div v-if="h.partner" class="text-xs text-gray-500 font-medium mt-1"><i class="fa-solid fa-user-tag text-[10px] mr-1"></i>{{ h.partner }}</div>
+              </div>
+              <div class="flex items-center gap-3">
+                <div v-if="h.qty_in > 0" class="text-center min-w-[40px]">
+                  <div class="text-[10px] text-emerald-600 font-bold mb-0.5">入庫</div>
+                  <div class="text-base font-black text-emerald-600">+{{ h.qty_in }}</div>
+                </div>
+                <div v-else-if="h.qty_out > 0" class="text-center min-w-[40px]">
+                  <div class="text-[10px] text-blue-600 font-bold mb-0.5">出庫</div>
+                  <div class="text-base font-black text-blue-600">-{{ h.qty_out }}</div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <footer class="mt-auto pt-10 pb-4 text-center text-xs text-gray-400"><p>薬の在庫・棚番検索システム</p></footer>
+</div>
